@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.2"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,10 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "1.3", date: "12 Jun 2026", changes: [
+            "Tag colors now come from the real Finder tag names, so the display always matches the tag filter results",
+            "Items with multiple tags show stacked color dots like Finder; folders tint with the first tag and show extra tags as dots",
+        ]),
         Release(version: "1.2", date: "12 Jun 2026", changes: [
             "Remembers the last folder of each pane and reopens there on next launch",
             "About / Help / changelog added to the macOS menu bar (About DualPane, Help ⌘?)",
