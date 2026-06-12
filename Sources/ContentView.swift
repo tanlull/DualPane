@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var newFolderName = "New Folder"
     @State private var confirmDelete = false
     @State private var cutURLs = Set<URL>()
+    @AppStorage("showTagColors") private var showTagColors = true
 
     private var active: PaneModel { activeSide == .left ? leftPane : rightPane }
     private var inactive: PaneModel { activeSide == .left ? rightPane : leftPane }
@@ -27,20 +28,23 @@ struct ContentView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            HSplitView {
+            HStack(spacing: 0) {
                 PaneView(
                     model: leftPane,
                     favorites: favorites,
                     isActive: activeSide == .left,
+                    showTagColors: showTagColors,
                     onActivate: { activeSide = .left },
                     onDropFiles: { copyDropped($0, into: leftPane) },
                     onCopyItems: { copyProviders(from: leftPane, cut: $0) },
                     onPasteItems: { paste($0, into: leftPane) }
                 )
+                transferStrip
                 PaneView(
                     model: rightPane,
                     favorites: favorites,
                     isActive: activeSide == .right,
+                    showTagColors: showTagColors,
                     onActivate: { activeSide = .right },
                     onDropFiles: { copyDropped($0, into: rightPane) },
                     onCopyItems: { copyProviders(from: rightPane, cut: $0) },
@@ -101,6 +105,11 @@ struct ContentView: View {
             Divider().frame(height: 22)
             toolButton("arrow.left.arrow.right", "Swap", help: "Swap pane directories") { swapPanes() }
             Spacer()
+            Toggle(isOn: $showTagColors) {
+                Label("Tags", systemImage: "tag")
+            }
+            .toggleStyle(.button)
+            .help("Show Finder tag colors next to file names")
             Toggle(isOn: Binding(
                 get: { active.showHidden },
                 set: { leftPane.showHidden = $0; rightPane.showHidden = $0 }
@@ -121,6 +130,34 @@ struct ContentView: View {
             Label(title, systemImage: icon)
         }
         .help(help)
+    }
+
+    private var transferStrip: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            Button {
+                copyBetween(from: leftPane, to: rightPane)
+            } label: {
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(leftPane.selection.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
+            }
+            .disabled(leftPane.selection.isEmpty)
+            .help("Copy selected files from left pane to right pane")
+            Button {
+                copyBetween(from: rightPane, to: leftPane)
+            } label: {
+                Image(systemName: "arrow.left.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(rightPane.selection.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
+            }
+            .disabled(rightPane.selection.isEmpty)
+            .help("Copy selected files from right pane to left pane")
+            Spacer()
+        }
+        .buttonStyle(.borderless)
+        .frame(width: 34)
+        .background(.bar)
     }
 
     private var statusBar: some View {
@@ -193,6 +230,20 @@ struct ContentView: View {
             counter += 1
         }
         return dest
+    }
+
+    private func copyBetween(from source: PaneModel, to dest: PaneModel) {
+        let items = source.selectedItems
+        guard !items.isEmpty else { return }
+        do {
+            for item in items {
+                try FileManager.default.copyItem(at: item.url, to: uniqueDestination(for: item.url, in: dest.directory))
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        leftPane.reload()
+        rightPane.reload()
     }
 
     private func copyProviders(from pane: PaneModel, cut: Bool) -> [NSItemProvider] {
@@ -314,6 +365,7 @@ struct PaneView: View {
     @ObservedObject var model: PaneModel
     @ObservedObject var favorites: FavoritesStore
     let isActive: Bool
+    let showTagColors: Bool
     let onActivate: () -> Void
     let onDropFiles: ([URL]) -> Bool
     let onCopyItems: (Bool) -> [NSItemProvider]
@@ -325,6 +377,7 @@ struct PaneView: View {
             Divider()
             FileTableView(
                 model: model,
+                showTagColors: showTagColors,
                 onActivate: onActivate,
                 onCopy: { writeToPasteboard(cut: false) },
                 onCut: { writeToPasteboard(cut: true) },

@@ -8,8 +8,23 @@ struct FileItem: Identifiable, Hashable {
     let size: Int64
     let modified: Date
     let icon: NSImage
+    let labelColor: NSColor?
 
     var id: URL { url }
+
+    // Finder label numbers → their standard colors
+    static func labelColor(forNumber number: Int?) -> NSColor? {
+        switch number {
+        case 1: return .systemGray
+        case 2: return .systemGreen
+        case 3: return .systemPurple
+        case 4: return .systemBlue
+        case 5: return .systemYellow
+        case 6: return .systemRed
+        case 7: return .systemOrange
+        default: return nil
+        }
+    }
 
     var sizeText: String {
         if isDirectory { return "—" }
@@ -51,7 +66,7 @@ final class PaneModel: ObservableObject {
 
     func reload() {
         let fm = FileManager.default
-        let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey, .labelNumberKey]
         var options: FileManager.DirectoryEnumerationOptions = []
         if !showHidden { options.insert(.skipsHiddenFiles) }
 
@@ -64,7 +79,8 @@ final class PaneModel: ObservableObject {
                 isDirectory: values?.isDirectory ?? false,
                 size: Int64(values?.fileSize ?? 0),
                 modified: values?.contentModificationDate ?? .distantPast,
-                icon: NSWorkspace.shared.icon(forFile: url.path)
+                icon: NSWorkspace.shared.icon(forFile: url.path),
+                labelColor: FileItem.labelColor(forNumber: values?.labelNumber)
             )
         }
         applySort()

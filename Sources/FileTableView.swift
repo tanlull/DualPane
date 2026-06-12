@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 // responder-chain copy/cut/paste.
 struct FileTableView: NSViewRepresentable {
     @ObservedObject var model: PaneModel
+    let showTagColors: Bool
     let onActivate: () -> Void
     let onCopy: () -> Void
     let onCut: () -> Void
@@ -79,8 +80,16 @@ struct FileTableView: NSViewRepresentable {
         let directoryChanged = coordinator.lastDirectory != model.directory
         coordinator.lastDirectory = model.directory
 
+        var needsReload = false
         if coordinator.items != model.items {
             coordinator.items = model.items
+            needsReload = true
+        }
+        if coordinator.showTagColors != showTagColors {
+            coordinator.showTagColors = showTagColors
+            needsReload = true
+        }
+        if needsReload {
             table.reloadData()
         }
         if directoryChanged {
@@ -104,6 +113,7 @@ struct FileTableView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
         var parent: FileTableView
         var items: [FileItem] = []
+        var showTagColors = true
         var isSyncingSelection = false
         var lastDirectory: URL?
         weak var tableView: NSTableView?
@@ -124,6 +134,9 @@ struct FileTableView: NSViewRepresentable {
                 cell.imageView?.image = item.icon
                 cell.textField?.stringValue = item.name
                 cell.textField?.textColor = .labelColor
+                if let dot = cell.subviews.first(where: { $0 is TagDotView }) as? TagDotView {
+                    dot.color = showTagColors ? item.labelColor : nil
+                }
             case "size":
                 cell.textField?.stringValue = item.sizeText
                 cell.textField?.textColor = .secondaryLabelColor
@@ -151,14 +164,22 @@ struct FileTableView: NSViewRepresentable {
                 image.translatesAutoresizingMaskIntoConstraints = false
                 cell.addSubview(image)
                 cell.imageView = image
+                let dot = TagDotView()
+                dot.translatesAutoresizingMaskIntoConstraints = false
+                cell.addSubview(dot)
+                text.setContentHuggingPriority(.defaultHigh, for: .horizontal)
                 NSLayoutConstraint.activate([
                     image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
                     image.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
                     image.widthAnchor.constraint(equalToConstant: 16),
                     image.heightAnchor.constraint(equalToConstant: 16),
                     text.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 5),
-                    text.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -2),
+                    text.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -16),
                     text.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                    dot.leadingAnchor.constraint(equalTo: text.trailingAnchor, constant: 5),
+                    dot.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                    dot.widthAnchor.constraint(equalToConstant: 9),
+                    dot.heightAnchor.constraint(equalToConstant: 9),
                 ])
             } else {
                 if identifier.rawValue == "size" { text.alignment = .right }
@@ -294,6 +315,23 @@ struct FileTableView: NSViewRepresentable {
         @objc func menuCopy(_ sender: Any?) { parent.onCopy() }
         @objc func menuCut(_ sender: Any?) { parent.onCut() }
         @objc func menuPaste(_ sender: Any?) { parent.onPaste() }
+    }
+}
+
+// MARK: - Finder tag color dot
+
+final class TagDotView: NSView {
+    var color: NSColor? {
+        didSet {
+            isHidden = color == nil
+            needsDisplay = true
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let color else { return }
+        color.setFill()
+        NSBezierPath(ovalIn: bounds.insetBy(dx: 0.5, dy: 0.5)).fill()
     }
 }
 
