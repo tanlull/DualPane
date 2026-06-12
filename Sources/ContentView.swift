@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var confirmDelete = false
     @State private var cutURLs = Set<URL>()
     @AppStorage("showTagColors") private var showTagColors = true
+    @State private var transferring: Side?
 
     private var active: PaneModel { activeSide == .left ? leftPane : rightPane }
     private var inactive: PaneModel { activeSide == .left ? rightPane : leftPane }
@@ -105,11 +106,33 @@ struct ContentView: View {
             Divider().frame(height: 22)
             toolButton("arrow.left.arrow.right", "Swap", help: "Swap pane directories") { swapPanes() }
             Spacer()
-            Toggle(isOn: $showTagColors) {
+            Menu {
+                Section("Tag selected items") {
+                    ForEach(Self.tagOptions, id: \.number) { option in
+                        Button {
+                            applyTag(option.number)
+                        } label: {
+                            Label {
+                                Text(option.name)
+                            } icon: {
+                                Image(nsImage: Self.tagSwatch(option.color))
+                            }
+                        }
+                    }
+                    Button {
+                        applyTag(0)
+                    } label: {
+                        Label("None (remove tag)", systemImage: "circle.slash")
+                    }
+                }
+                Divider()
+                Toggle("Show Tag Colors", isOn: $showTagColors)
+            } label: {
                 Label("Tags", systemImage: "tag")
             }
-            .toggleStyle(.button)
-            .help("Show Finder tag colors next to file names")
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Tag the selected files with a color (like Finder)")
             Toggle(isOn: Binding(
                 get: { active.showHidden },
                 set: { leftPane.showHidden = $0; rightPane.showHidden = $0 }
@@ -135,29 +158,38 @@ struct ContentView: View {
     private var transferStrip: some View {
         VStack(spacing: 14) {
             Spacer()
-            Button {
-                copyBetween(from: leftPane, to: rightPane)
-            } label: {
-                Image(systemName: "arrow.right.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(leftPane.selection.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
-            }
-            .disabled(leftPane.selection.isEmpty)
-            .help("Copy selected files from left pane to right pane")
-            Button {
-                copyBetween(from: rightPane, to: leftPane)
-            } label: {
-                Image(systemName: "arrow.left.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(rightPane.selection.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
-            }
-            .disabled(rightPane.selection.isEmpty)
-            .help("Copy selected files from right pane to left pane")
+            transferButton(side: .left, icon: "arrow.right.circle.fill",
+                           source: leftPane, dest: rightPane,
+                           help: "Copy selected files from left pane to right pane")
+            transferButton(side: .right, icon: "arrow.left.circle.fill",
+                           source: rightPane, dest: leftPane,
+                           help: "Copy selected files from right pane to left pane")
             Spacer()
         }
         .buttonStyle(.borderless)
         .frame(width: 34)
         .background(.bar)
+    }
+
+    @ViewBuilder
+    private func transferButton(side: Side, icon: String, source: PaneModel, dest: PaneModel, help: String) -> some View {
+        if transferring == side {
+            ProgressView()
+                .controlSize(.small)
+                .frame(height: 22)
+        } else {
+            Button {
+                copyBetween(from: source, to: dest, side: side)
+            } label: {
+                Image(systemName: icon)
+                    .font(.title2)
+                    .foregroundStyle(source.selection.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
+                    .scaleEffect(source.selection.isEmpty ? 1.0 : 1.08)
+                    .animation(.spring(duration: 0.25), value: source.selection.isEmpty)
+            }
+            .disabled(source.selection.isEmpty || transferring != nil)
+            .help(help)
+        }
     }
 
     private var statusBar: some View {
@@ -232,18 +264,84 @@ struct ContentView: View {
         return dest
     }
 
-    private func copyBetween(from source: PaneModel, to dest: PaneModel) {
-        let items = source.selectedItems
+    // Finder label numbers in Finder's menu order
+    static let tagOptions: [(name: String, color: NSColor, number: Int)] = [
+        ("Red", .systemRed, 6),
+        ("Orange", .systemOrange, 7),
+        ("Yellow", .systemYellow, 5),
+        ("Green", .systemGreen, 2),
+        ("Blue", .systemBlue, 4),
+        ("Purple", .systemPurple, 3),
+        ("Gray", .systemGray, 1),
+    ]
+
+    static func tagSwatch(_ color: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+            color.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 1.5, dy: 1.5)).fill()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
+    private func applyTag(_ number: Int) {
+        let items = active.selectedItems
         guard !items.isEmpty else { return }
         do {
             for item in items {
-                try FileManager.default.copyItem(at: item.url, to: uniqueDestination(for: item.url, in: dest.directory))
+                var url = item.url
+                var values = URLResourceValues()
+                values.labelNumber = number
+                try url.setResourceValues(values)
             }
         } catch {
             errorMessage = error.localizedDescription
         }
-        leftPane.reload()
-        rightPane.reload()
+        active.reload()
+        showTagColors = true
+    }
+
+    private func copyBetween(from source: PaneModel, to dest: PaneModel, side: Side) {
+        let items = source.selectedItems
+        guard !items.isEmpty, transferring == nil else { return }
+        transferring = side
+        let sourceURLs = items.map(\.url)
+        let destDir = dest.directory
+        let resolveDestination = uniqueDestination
+
+        Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            var copied: [URL] = []
+            var failure: String?
+            let started = Date()
+            for url in sourceURLs {
+                do {
+                    let target = resolveDestination(url, destDir)
+                    try fm.copyItem(at: url, to: target)
+                    // Touch the copy so date-sorted panes show it on top
+                    try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
+                    copied.append(target)
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
+            // Keep the spinner visible long enough to register
+            let elapsed = Date().timeIntervalSince(started)
+            if elapsed < 0.4 {
+                try? await Task.sleep(nanoseconds: UInt64((0.4 - elapsed) * 1_000_000_000))
+            }
+            let copiedResult = copied
+            let failureResult = failure
+            await MainActor.run {
+                transferring = nil
+                errorMessage = failureResult
+                leftPane.reload()
+                rightPane.reload()
+                // Highlight the new files in the destination pane
+                dest.selection = Set(copiedResult)
+            }
+        }
     }
 
     private func copyProviders(from pane: PaneModel, cut: Bool) -> [NSItemProvider] {

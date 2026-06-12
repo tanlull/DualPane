@@ -1,5 +1,29 @@
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
+
+// Caches icons by file type instead of asking NSWorkspace per file —
+// icon(forFile:) is the slowest part of listing a directory.
+@MainActor
+enum IconProvider {
+    private static var cache: [String: NSImage] = [:]
+    private static let folderIcon = NSWorkspace.shared.icon(for: .folder)
+    private static let genericIcon = NSWorkspace.shared.icon(for: .data)
+
+    static func icon(for url: URL, isDirectory: Bool) -> NSImage {
+        let ext = url.pathExtension.lowercased()
+        if isDirectory {
+            // Apps and bundles have unique icons worth the per-file cost
+            if ext == "app" { return NSWorkspace.shared.icon(forFile: url.path) }
+            return folderIcon
+        }
+        if ext.isEmpty { return genericIcon }
+        if let cached = cache[ext] { return cached }
+        let icon = NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
+        cache[ext] = icon
+        return icon
+    }
+}
 
 struct FileItem: Identifiable, Hashable {
     let url: URL
@@ -56,6 +80,10 @@ final class PaneModel: ObservableObject {
         didSet { applySort() }
     }
 
+    // Bumped whenever items actually change, so the table view can skip
+    // expensive array comparisons on selection-only updates.
+    private(set) var revision = 0
+
     private var history: [URL] = []
 
     init(directory: URL) {
@@ -73,13 +101,14 @@ final class PaneModel: ObservableObject {
         let urls = (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys, options: options)) ?? []
         items = urls.map { url in
             let values = try? url.resourceValues(forKeys: Set(keys))
+            let isDirectory = values?.isDirectory ?? false
             return FileItem(
                 url: url,
                 name: url.lastPathComponent,
-                isDirectory: values?.isDirectory ?? false,
+                isDirectory: isDirectory,
                 size: Int64(values?.fileSize ?? 0),
                 modified: values?.contentModificationDate ?? .distantPast,
-                icon: NSWorkspace.shared.icon(forFile: url.path),
+                icon: IconProvider.icon(for: url, isDirectory: isDirectory),
                 labelColor: FileItem.labelColor(forNumber: values?.labelNumber)
             )
         }
@@ -92,6 +121,7 @@ final class PaneModel: ObservableObject {
         let dirs = items.filter(\.isDirectory).sorted(using: sortOrder)
         let files = items.filter { !$0.isDirectory }.sorted(using: sortOrder)
         items = dirs + files
+        revision += 1
     }
 
     func navigate(to url: URL) {

@@ -81,7 +81,8 @@ struct FileTableView: NSViewRepresentable {
         coordinator.lastDirectory = model.directory
 
         var needsReload = false
-        if coordinator.items != model.items {
+        if coordinator.lastRevision != model.revision {
+            coordinator.lastRevision = model.revision
             coordinator.items = model.items
             needsReload = true
         }
@@ -113,6 +114,7 @@ struct FileTableView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
         var parent: FileTableView
         var items: [FileItem] = []
+        var lastRevision = -1
         var showTagColors = true
         var isSyncingSelection = false
         var lastDirectory: URL?
