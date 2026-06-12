@@ -10,6 +10,39 @@ struct DualPaneApp: App {
             ContentView()
                 .frame(minWidth: 960, minHeight: 540)
         }
+        .commands {
+            AppCommands()
+        }
+
+        Window("About \(AppInfo.name)", id: "about") {
+            AboutView()
+        }
+        .windowResizability(.contentSize)
+    }
+}
+
+struct AppCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("About \(AppInfo.name)") {
+                openWindow(id: "about")
+            }
+        }
+        CommandGroup(replacing: .help) {
+            Button("\(AppInfo.name) Help") {
+                openWindow(id: "about")
+            }
+            .keyboardShortcut("?", modifiers: .command)
+            Button("What's New (Changelog)") {
+                openWindow(id: "about")
+            }
+            Divider()
+            Button("\(AppInfo.name) on GitHub") {
+                NSWorkspace.shared.open(AppInfo.repoURL)
+            }
+        }
     }
 }
 
