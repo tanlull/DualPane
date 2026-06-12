@@ -290,6 +290,10 @@ struct ContentView: View {
         guard !items.isEmpty else { return }
         do {
             for item in items {
+                // Write both the modern tag name (what Spotlight/Finder index)
+                // and the legacy label number, exactly like Finder does.
+                let names: [String] = number == 0 ? [] : [PaneModel.tagNames[number] ?? ""]
+                try (item.url as NSURL).setResourceValue(names, forKey: .tagNamesKey)
                 var url = item.url
                 var values = URLResourceValues()
                 values.labelNumber = number
