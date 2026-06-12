@@ -10,11 +10,19 @@ enum IconProvider {
     private static let folderIcon = NSWorkspace.shared.icon(for: .folder)
     private static let genericIcon = NSWorkspace.shared.icon(for: .data)
 
-    static func icon(for url: URL, isDirectory: Bool) -> NSImage {
+    static func icon(for url: URL, isDirectory: Bool, label: Int = 0) -> NSImage {
         let ext = url.pathExtension.lowercased()
         if isDirectory {
             // Apps and bundles have unique icons worth the per-file cost
             if ext == "app" { return NSWorkspace.shared.icon(forFile: url.path) }
+            // Tagged folders are tinted with their Finder tag color
+            if label > 0, let color = FileItem.labelColor(forNumber: label) {
+                let key = "folder-label-\(label)"
+                if let cached = cache[key] { return cached }
+                let tinted = tintedFolder(color)
+                cache[key] = tinted
+                return tinted
+            }
             return folderIcon
         }
         if ext.isEmpty { return genericIcon }
@@ -22,6 +30,17 @@ enum IconProvider {
         let icon = NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
         cache[ext] = icon
         return icon
+    }
+
+    private static func tintedFolder(_ color: NSColor) -> NSImage {
+        let base = folderIcon
+        let image = NSImage(size: NSSize(width: 32, height: 32), flipped: false) { rect in
+            base.draw(in: rect)
+            color.withAlphaComponent(0.72).setFill()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        return image
     }
 }
 
@@ -33,6 +52,7 @@ struct FileItem: Identifiable, Hashable {
     let modified: Date
     let icon: NSImage
     let labelColor: NSColor?
+    let labelNumber: Int
 
     var id: URL { url }
 
@@ -74,6 +94,10 @@ final class PaneModel: ObservableObject {
     @Published var showHidden = false {
         didSet { reload() }
     }
+    // Finder label number to filter by; nil shows everything
+    @Published var tagFilter: Int? {
+        didSet { reload() }
+    }
     @Published var sortOrder: [KeyPathComparator<FileItem>] = [
         KeyPathComparator(\FileItem.name, comparator: .localizedStandard)
     ] {
@@ -102,15 +126,20 @@ final class PaneModel: ObservableObject {
         items = urls.map { url in
             let values = try? url.resourceValues(forKeys: Set(keys))
             let isDirectory = values?.isDirectory ?? false
+            let label = values?.labelNumber ?? 0
             return FileItem(
                 url: url,
                 name: url.lastPathComponent,
                 isDirectory: isDirectory,
                 size: Int64(values?.fileSize ?? 0),
                 modified: values?.contentModificationDate ?? .distantPast,
-                icon: IconProvider.icon(for: url, isDirectory: isDirectory),
-                labelColor: FileItem.labelColor(forNumber: values?.labelNumber)
+                icon: IconProvider.icon(for: url, isDirectory: isDirectory, label: label),
+                labelColor: FileItem.labelColor(forNumber: label),
+                labelNumber: label
             )
+        }
+        if let filter = tagFilter {
+            items = items.filter { $0.labelNumber == filter }
         }
         applySort()
         pathText = directory.path

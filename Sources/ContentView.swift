@@ -491,6 +491,14 @@ struct PaneView: View {
         }
     }
 
+    private var filterTint: Color {
+        guard let filter = model.tagFilter,
+              let option = ContentView.tagOptions.first(where: { $0.number == filter }) else {
+            return .secondary
+        }
+        return Color(nsColor: option.color)
+    }
+
     private func writeToPasteboard(cut: Bool) {
         let providers = onCopyItems(cut)
         guard !providers.isEmpty else { return }
@@ -548,6 +556,29 @@ struct PaneView: View {
                     .foregroundStyle(favorites.contains(model.directory) ? .yellow : .secondary)
             }
             .help(favorites.contains(model.directory) ? "Remove this folder from favorites" : "Add this folder to favorites")
+            Menu {
+                Picker("Filter by tag", selection: $model.tagFilter) {
+                    Label("All Items", systemImage: "circle.grid.2x2")
+                        .tag(Int?.none)
+                    ForEach(ContentView.tagOptions, id: \.number) { option in
+                        Label {
+                            Text(option.name)
+                        } icon: {
+                            Image(nsImage: ContentView.tagSwatch(option.color))
+                        }
+                        .tag(Int?.some(option.number))
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Image(systemName: model.tagFilter == nil
+                      ? "line.3.horizontal.decrease.circle"
+                      : "line.3.horizontal.decrease.circle.fill")
+                    .foregroundStyle(filterTint)
+            }
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Show only items with a tag color")
             TextField("Path", text: $model.pathText)
                 .textFieldStyle(.roundedBorder)
                 .font(.callout)

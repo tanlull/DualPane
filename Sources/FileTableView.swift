@@ -137,7 +137,8 @@ struct FileTableView: NSViewRepresentable {
                 cell.textField?.stringValue = item.name
                 cell.textField?.textColor = .labelColor
                 if let dot = cell.subviews.first(where: { $0 is TagDotView }) as? TagDotView {
-                    dot.color = showTagColors ? item.labelColor : nil
+                    // Folders show their tag via the tinted folder icon; files get the dot
+                    dot.color = (showTagColors && !item.isDirectory) ? item.labelColor : nil
                 }
             case "size":
                 cell.textField?.stringValue = item.sizeText
