@@ -274,6 +274,7 @@ struct FileTableView: NSViewRepresentable {
         func buildMenu() -> NSMenu {
             let menu = NSMenu()
             menu.delegate = self
+            menu.autoenablesItems = false
             menu.addItem(makeMenuItem("Open", #selector(menuOpen)))
             menu.addItem(makeMenuItem("Reveal in Finder", #selector(menuReveal)))
             menu.addItem(.separator())
@@ -282,6 +283,8 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Copy", #selector(menuCopy)))
             menu.addItem(makeMenuItem("Cut", #selector(menuCut)))
             menu.addItem(makeMenuItem("Paste", #selector(menuPaste)))
+            menu.addItem(.separator())
+            menu.addItem(makeMenuItem("Refresh", #selector(menuRefresh)))
             return menu
         }
 
@@ -322,6 +325,10 @@ struct FileTableView: NSViewRepresentable {
         }
 
         @objc func menuRename(_ sender: Any?) { parent.onRename() }
+
+        @objc func menuRefresh(_ sender: Any?) {
+            MainActor.assumeIsolated { parent.model.reload() }
+        }
 
         @objc func menuCopy(_ sender: Any?) { parent.onCopy() }
         @objc func menuCut(_ sender: Any?) { parent.onCut() }

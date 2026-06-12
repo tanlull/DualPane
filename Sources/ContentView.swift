@@ -29,7 +29,19 @@ struct ContentView: View {
     @State private var cutURLs = Set<URL>()
     @AppStorage("showTagColors") private var showTagColors = true
     @State private var transferring: Side?
+    @State private var pendingConflict: TransferRequest?
     @Environment(\.openWindow) private var openWindow
+
+    enum ConflictChoice { case replace, keepBoth }
+
+    struct TransferRequest {
+        var sources: [URL]
+        var destDir: URL
+        var move: Bool
+        var touchDates = false
+        var highlightIn: PaneModel?
+        var side: Side?
+    }
 
     private var active: PaneModel { activeSide == .left ? leftPane : rightPane }
     private var inactive: PaneModel { activeSide == .left ? rightPane : leftPane }
@@ -70,6 +82,22 @@ struct ContentView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .alert("Items already exist", isPresented: Binding(
+            get: { pendingConflict != nil },
+            set: { if !$0 { pendingConflict = nil } }
+        )) {
+            Button("Keep Both") {
+                if let request = pendingConflict { runTransfer(request, choice: .keepBoth) }
+                pendingConflict = nil
+            }
+            Button("Replace", role: .destructive) {
+                if let request = pendingConflict { runTransfer(request, choice: .replace) }
+                pendingConflict = nil
+            }
+            Button("Cancel", role: .cancel) { pendingConflict = nil }
+        } message: {
+            Text("One or more items with the same name already exist in the destination folder.\n\n“Replace” moves the existing items to the Trash. “Keep Both” gives the new copies a numbered name.")
         }
         .alert("Delete \(active.selection.count) item(s)?", isPresented: $confirmDelete) {
             Button("Move to Trash", role: .destructive) { deleteSelection() }
@@ -244,24 +272,82 @@ struct ContentView: View {
     // MARK: - Operations
 
     private func transfer(move: Bool) {
-        let sources = active.selectedItems
+        let sources = active.selectedItems.map(\.url)
         guard !sources.isEmpty else { return }
-        let destDir = inactive.directory
+        submitTransfer(TransferRequest(sources: sources, destDir: inactive.directory, move: move))
+    }
+
+    // Entry point for every copy/move: shows the conflict dialog first if
+    // any destination names already exist.
+    private func submitTransfer(_ request: TransferRequest) {
         let fm = FileManager.default
-        do {
-            for item in sources {
-                let dest = uniqueDestination(for: item.url, in: destDir)
-                if move {
-                    try fm.moveItem(at: item.url, to: dest)
-                } else {
-                    try fm.copyItem(at: item.url, to: dest)
+        let hasConflict = request.sources.contains {
+            fm.fileExists(atPath: request.destDir.appendingPathComponent($0.lastPathComponent).path)
+        }
+        if hasConflict {
+            pendingConflict = request
+        } else {
+            runTransfer(request, choice: .keepBoth)
+        }
+    }
+
+    private func runTransfer(_ request: TransferRequest, choice: ConflictChoice) {
+        if let side = request.side { transferring = side }
+        let resolveDestination = uniqueDestination
+
+        Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            var results: [URL] = []
+            var failure: String?
+            let started = Date()
+            for url in request.sources {
+                do {
+                    let plain = request.destDir.appendingPathComponent(url.lastPathComponent)
+                    var target = plain
+                    if fm.fileExists(atPath: plain.path) {
+                        if plain.standardizedFileURL.path == url.standardizedFileURL.path {
+                            // Source and destination are the same file
+                            if request.move { continue }
+                            target = resolveDestination(url, request.destDir)
+                        } else {
+                            switch choice {
+                            case .replace:
+                                try fm.trashItem(at: plain, resultingItemURL: nil)
+                            case .keepBoth:
+                                target = resolveDestination(url, request.destDir)
+                            }
+                        }
+                    }
+                    if request.move {
+                        try fm.moveItem(at: url, to: target)
+                    } else {
+                        try fm.copyItem(at: url, to: target)
+                    }
+                    if request.touchDates {
+                        try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
+                    }
+                    results.append(target)
+                } catch {
+                    failure = error.localizedDescription
                 }
             }
-        } catch {
-            errorMessage = error.localizedDescription
+            if request.side != nil {
+                // Keep the spinner visible long enough to register
+                let elapsed = Date().timeIntervalSince(started)
+                if elapsed < 0.4 {
+                    try? await Task.sleep(nanoseconds: UInt64((0.4 - elapsed) * 1_000_000_000))
+                }
+            }
+            let copied = results
+            let failureResult = failure
+            await MainActor.run {
+                transferring = nil
+                errorMessage = failureResult
+                leftPane.reload()
+                rightPane.reload()
+                request.highlightIn?.selection = Set(copied)
+            }
         }
-        leftPane.reload()
-        rightPane.reload()
     }
 
     private func uniqueDestination(for source: URL, in directory: URL) -> URL {
@@ -321,45 +407,11 @@ struct ContentView: View {
     }
 
     private func copyBetween(from source: PaneModel, to dest: PaneModel, side: Side) {
-        let items = source.selectedItems
-        guard !items.isEmpty, transferring == nil else { return }
-        transferring = side
-        let sourceURLs = items.map(\.url)
-        let destDir = dest.directory
-        let resolveDestination = uniqueDestination
-
-        Task.detached(priority: .userInitiated) {
-            let fm = FileManager.default
-            var copied: [URL] = []
-            var failure: String?
-            let started = Date()
-            for url in sourceURLs {
-                do {
-                    let target = resolveDestination(url, destDir)
-                    try fm.copyItem(at: url, to: target)
-                    // Touch the copy so date-sorted panes show it on top
-                    try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
-                    copied.append(target)
-                } catch {
-                    failure = error.localizedDescription
-                }
-            }
-            // Keep the spinner visible long enough to register
-            let elapsed = Date().timeIntervalSince(started)
-            if elapsed < 0.4 {
-                try? await Task.sleep(nanoseconds: UInt64((0.4 - elapsed) * 1_000_000_000))
-            }
-            let copiedResult = copied
-            let failureResult = failure
-            await MainActor.run {
-                transferring = nil
-                errorMessage = failureResult
-                leftPane.reload()
-                rightPane.reload()
-                // Highlight the new files in the destination pane
-                dest.selection = Set(copiedResult)
-            }
-        }
+        let sources = source.selectedItems.map(\.url)
+        guard !sources.isEmpty, transferring == nil else { return }
+        submitTransfer(TransferRequest(
+            sources: sources, destDir: dest.directory, move: false,
+            touchDates: true, highlightIn: dest, side: side))
     }
 
     private func copyProviders(from pane: PaneModel, cut: Bool) -> [NSItemProvider] {
@@ -388,43 +440,25 @@ struct ContentView: View {
     }
 
     private func performPaste(_ urls: [URL], into pane: PaneModel) {
-        let fm = FileManager.default
         let destDir = pane.directory.standardizedFileURL
-        var consumedCut = false
-        do {
-            for url in urls where url.isFileURL {
-                let isCut = cutURLs.contains(url)
-                let sameDir = url.deletingLastPathComponent().standardizedFileURL.path == destDir.path
-                if isCut {
-                    consumedCut = true
-                    guard !sameDir else { continue }
-                    try fm.moveItem(at: url, to: uniqueDestination(for: url, in: destDir))
-                } else {
-                    try fm.copyItem(at: url, to: uniqueDestination(for: url, in: destDir))
-                }
-            }
-        } catch {
-            errorMessage = error.localizedDescription
+        let fileURLs = urls.filter(\.isFileURL)
+        guard !fileURLs.isEmpty else { return }
+        let isMove = fileURLs.contains { cutURLs.contains($0) }
+        var sources = fileURLs
+        if isMove {
+            // Moving into the folder the file is already in is a no-op
+            sources = sources.filter { $0.deletingLastPathComponent().standardizedFileURL.path != destDir.path }
+            cutURLs.removeAll()
+            guard !sources.isEmpty else { return }
         }
-        if consumedCut { cutURLs.removeAll() }
-        leftPane.reload()
-        rightPane.reload()
+        submitTransfer(TransferRequest(sources: sources, destDir: destDir, move: isMove))
     }
 
     private func copyDropped(_ urls: [URL], into pane: PaneModel) -> Bool {
         let fileURLs = urls.filter(\.isFileURL)
             .filter { $0.deletingLastPathComponent().standardizedFileURL.path != pane.directory.standardizedFileURL.path }
         guard !fileURLs.isEmpty else { return false }
-        do {
-            for url in fileURLs {
-                let dest = uniqueDestination(for: url, in: pane.directory)
-                try FileManager.default.copyItem(at: url, to: dest)
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        leftPane.reload()
-        rightPane.reload()
+        submitTransfer(TransferRequest(sources: fileURLs, destDir: pane.directory, move: false))
         return true
     }
 
