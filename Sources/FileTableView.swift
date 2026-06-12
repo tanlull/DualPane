@@ -137,8 +137,10 @@ struct FileTableView: NSViewRepresentable {
                 cell.textField?.stringValue = item.name
                 cell.textField?.textColor = .labelColor
                 if let dot = cell.subviews.first(where: { $0 is TagDotView }) as? TagDotView {
-                    // Folders show their tag via the tinted folder icon; files get the dot
-                    dot.color = (showTagColors && !item.isDirectory) ? item.labelColor : nil
+                    // Folders show their first tag via the tinted icon; extra tags
+                    // appear as dots. Files show all tag colors as dots.
+                    let colors = showTagColors ? item.tagColors : []
+                    dot.colors = item.isDirectory ? Array(colors.dropFirst()) : colors
                 }
             case "size":
                 cell.textField?.stringValue = item.sizeText
@@ -181,7 +183,6 @@ struct FileTableView: NSViewRepresentable {
                     text.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
                     dot.leadingAnchor.constraint(equalTo: text.trailingAnchor, constant: 5),
                     dot.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                    dot.widthAnchor.constraint(equalToConstant: 9),
                     dot.heightAnchor.constraint(equalToConstant: 9),
                 ])
             } else {
@@ -324,17 +325,35 @@ struct FileTableView: NSViewRepresentable {
 // MARK: - Finder tag color dot
 
 final class TagDotView: NSView {
-    var color: NSColor? {
+    private static let dotSize: CGFloat = 9
+    private static let dotStep: CGFloat = 5 // overlap like Finder
+
+    var colors: [NSColor] = [] {
         didSet {
-            isHidden = color == nil
+            isHidden = colors.isEmpty
+            invalidateIntrinsicContentSize()
             needsDisplay = true
         }
     }
 
+    override var intrinsicContentSize: NSSize {
+        guard !colors.isEmpty else { return .zero }
+        let width = Self.dotSize + Self.dotStep * CGFloat(colors.count - 1)
+        return NSSize(width: width, height: Self.dotSize)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        guard let color else { return }
-        color.setFill()
-        NSBezierPath(ovalIn: bounds.insetBy(dx: 0.5, dy: 0.5)).fill()
+        let y = (bounds.height - Self.dotSize) / 2
+        for (index, color) in colors.enumerated() {
+            let rect = NSRect(x: CGFloat(index) * Self.dotStep, y: y,
+                              width: Self.dotSize, height: Self.dotSize)
+            let path = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
+            color.setFill()
+            path.fill()
+            NSColor.controlBackgroundColor.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
     }
 }
 

@@ -10,14 +10,14 @@ enum IconProvider {
     private static let folderIcon = NSWorkspace.shared.icon(for: .folder)
     private static let genericIcon = NSWorkspace.shared.icon(for: .data)
 
-    static func icon(for url: URL, isDirectory: Bool, label: Int = 0) -> NSImage {
+    static func icon(for url: URL, isDirectory: Bool, tintColor: NSColor? = nil, tintKey: String = "") -> NSImage {
         let ext = url.pathExtension.lowercased()
         if isDirectory {
             // Apps and bundles have unique icons worth the per-file cost
             if ext == "app" { return NSWorkspace.shared.icon(forFile: url.path) }
-            // Tagged folders are tinted with their Finder tag color
-            if label > 0, let color = FileItem.labelColor(forNumber: label) {
-                let key = "folder-label-\(label)"
+            // Tagged folders are tinted with their first Finder tag color
+            if let color = tintColor {
+                let key = "folder-tint-\(tintKey)"
                 if let cached = cache[key] { return cached }
                 let tinted = tintedFolder(color)
                 cache[key] = tinted
@@ -51,8 +51,7 @@ struct FileItem: Identifiable, Hashable {
     let size: Int64
     let modified: Date
     let icon: NSImage
-    let labelColor: NSColor?
-    let labelNumber: Int
+    let tagColors: [NSColor]
 
     var id: URL { url }
 
@@ -69,6 +68,13 @@ struct FileItem: Identifiable, Hashable {
         default: return nil
         }
     }
+
+    // Standard Finder tag names → colors (tag names are what Spotlight indexes)
+    static let tagNameColors: [String: NSColor] = [
+        "Red": .systemRed, "Orange": .systemOrange, "Yellow": .systemYellow,
+        "Green": .systemGreen, "Blue": .systemBlue, "Purple": .systemPurple,
+        "Gray": .systemGray, "Grey": .systemGray,
+    ]
 
     var sizeText: String {
         if isDirectory { return "—" }
@@ -153,22 +159,31 @@ final class PaneModel: ObservableObject {
     }
 
     private static let itemKeys: Set<URLResourceKey> = [
-        .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey, .labelNumberKey,
+        .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey,
+        .labelNumberKey, .tagNamesKey,
     ]
 
     private func makeItem(url: URL) -> FileItem {
         let values = try? url.resourceValues(forKeys: Self.itemKeys)
         let isDirectory = values?.isDirectory ?? false
-        let label = values?.labelNumber ?? 0
+        // Colors come from the tag names (the source of truth Finder and
+        // Spotlight use); legacy label number is only a fallback.
+        let names = values?.tagNames ?? []
+        var colors = names.compactMap { FileItem.tagNameColors[$0] }
+        var tagKey = names.first(where: { FileItem.tagNameColors[$0] != nil }) ?? ""
+        if colors.isEmpty, let legacy = FileItem.labelColor(forNumber: values?.labelNumber) {
+            colors = [legacy]
+            tagKey = "label\(values?.labelNumber ?? 0)"
+        }
         return FileItem(
             url: url,
             name: url.lastPathComponent,
             isDirectory: isDirectory,
             size: Int64(values?.fileSize ?? 0),
             modified: values?.contentModificationDate ?? .distantPast,
-            icon: IconProvider.icon(for: url, isDirectory: isDirectory, label: label),
-            labelColor: FileItem.labelColor(forNumber: label),
-            labelNumber: label
+            icon: IconProvider.icon(for: url, isDirectory: isDirectory,
+                                    tintColor: colors.first, tintKey: tagKey),
+            tagColors: colors
         )
     }
 
