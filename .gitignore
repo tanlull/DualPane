@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+DualPane.app/
+DualPane.iconset/
+AppIcon.icns
+dist/
+.DS_Store
