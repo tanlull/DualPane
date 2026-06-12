@@ -5,10 +5,18 @@ import UniformTypeIdentifiers
 enum Side { case left, right }
 
 struct ContentView: View {
-    @StateObject private var leftPane = PaneModel(directory: FileManager.default.homeDirectoryForCurrentUser)
+    @StateObject private var leftPane = PaneModel(
+        directory: PaneModel.restoredDirectory(
+            key: "leftPaneDirectory",
+            fallback: FileManager.default.homeDirectoryForCurrentUser),
+        persistKey: "leftPaneDirectory"
+    )
     @StateObject private var rightPane = PaneModel(
-        directory: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
+        directory: PaneModel.restoredDirectory(
+            key: "rightPaneDirectory",
+            fallback: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+                ?? FileManager.default.homeDirectoryForCurrentUser),
+        persistKey: "rightPaneDirectory"
     )
     @StateObject private var favorites = FavoritesStore()
     @State private var activeSide: Side = .left

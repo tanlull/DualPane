@@ -87,7 +87,9 @@ struct FileItem: Identifiable, Hashable {
 
 @MainActor
 final class PaneModel: ObservableObject {
-    @Published var directory: URL
+    @Published var directory: URL {
+        didSet { persistDirectory() }
+    }
     @Published var items: [FileItem] = []
     @Published var selection = Set<URL>()
     @Published var pathText: String
@@ -109,11 +111,28 @@ final class PaneModel: ObservableObject {
     private(set) var revision = 0
 
     private var history: [URL] = []
+    private let persistKey: String?
 
-    init(directory: URL) {
+    init(directory: URL, persistKey: String? = nil) {
+        self.persistKey = persistKey
         self.directory = directory
         self.pathText = directory.path
         reload()
+    }
+
+    // Restores the directory saved under `key`, falling back if it no longer exists
+    static func restoredDirectory(key: String, fallback: URL) -> URL {
+        guard let path = UserDefaults.standard.string(forKey: key) else { return fallback }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            return fallback
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    private func persistDirectory() {
+        guard let persistKey else { return }
+        UserDefaults.standard.set(directory.path, forKey: persistKey)
     }
 
     func reload() {
