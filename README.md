@@ -4,6 +4,8 @@ A simple, fast, two-pane file manager for macOS — inspired by classic dual-pan
 managers like [xplorer²](https://www.zabkat.com/) and Norton Commander, built
 natively with Swift, SwiftUI, and AppKit.
 
+![DualPane — two-pane file manager for macOS](docs/screenshot.png)
+
 ## Features
 
 - **Two independent panes** side by side, each with its own folder, path bar, and history
