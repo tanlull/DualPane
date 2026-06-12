@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var cutURLs = Set<URL>()
     @AppStorage("showTagColors") private var showTagColors = true
     @State private var transferring: Side?
+    @State private var showAbout = false
 
     private var active: PaneModel { activeSide == .left ? leftPane : rightPane }
     private var inactive: PaneModel { activeSide == .left ? rightPane : leftPane }
@@ -75,6 +76,9 @@ struct ContentView: View {
             namePrompt(title: "New Folder", text: $newFolderName, confirm: "Create") {
                 performNewFolder()
             }
+        }
+        .sheet(isPresented: $showAbout) {
+            AboutView()
         }
     }
 
@@ -141,6 +145,12 @@ struct ContentView: View {
             }
             .toggleStyle(.button)
             .help("Show hidden files")
+            Button {
+                showAbout = true
+            } label: {
+                Image(systemName: "questionmark.circle")
+            }
+            .help("About DualPane — version, changelog, and help")
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 12)

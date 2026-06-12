@@ -6,7 +6,7 @@ struct DualPaneApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
 
     var body: some Scene {
-        WindowGroup("DualPane") {
+        WindowGroup("\(AppInfo.name) \(AppInfo.version)") {
             ContentView()
                 .frame(minWidth: 960, minHeight: 540)
         }
