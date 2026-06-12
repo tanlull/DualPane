@@ -578,7 +578,7 @@ struct PaneView: View {
             }
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Show only items with a tag color")
+            .help("Show all items with this tag color from your whole Home folder")
             TextField("Path", text: $model.pathText)
                 .textFieldStyle(.roundedBorder)
                 .font(.callout)
