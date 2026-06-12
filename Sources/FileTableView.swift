@@ -11,6 +11,7 @@ struct FileTableView: NSViewRepresentable {
     let onCopy: () -> Void
     let onCut: () -> Void
     let onPaste: () -> Void
+    let onRename: () -> Void
     let onDrop: ([URL]) -> Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -276,6 +277,8 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Open", #selector(menuOpen)))
             menu.addItem(makeMenuItem("Reveal in Finder", #selector(menuReveal)))
             menu.addItem(.separator())
+            menu.addItem(makeMenuItem("Rename…", #selector(menuRename)))
+            menu.addItem(.separator())
             menu.addItem(makeMenuItem("Copy", #selector(menuCopy)))
             menu.addItem(makeMenuItem("Cut", #selector(menuCut)))
             menu.addItem(makeMenuItem("Paste", #selector(menuPaste)))
@@ -300,6 +303,8 @@ struct FileTableView: NSViewRepresentable {
                 switch item.action {
                 case #selector(menuOpen), #selector(menuReveal), #selector(menuCopy), #selector(menuCut):
                     item.isEnabled = hasSelection
+                case #selector(menuRename):
+                    item.isEnabled = table.selectedRowIndexes.count == 1
                 case #selector(menuPaste):
                     item.isEnabled = canPaste
                 default:
@@ -315,6 +320,8 @@ struct FileTableView: NSViewRepresentable {
             let urls = table.selectedRowIndexes.compactMap { $0 < items.count ? items[$0].url : nil }
             NSWorkspace.shared.activateFileViewerSelecting(urls)
         }
+
+        @objc func menuRename(_ sender: Any?) { parent.onRename() }
 
         @objc func menuCopy(_ sender: Any?) { parent.onCopy() }
         @objc func menuCut(_ sender: Any?) { parent.onCut() }

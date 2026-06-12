@@ -45,6 +45,7 @@ struct ContentView: View {
                     isActive: activeSide == .left,
                     showTagColors: showTagColors,
                     onActivate: { activeSide = .left },
+                    onRename: { startRename(in: leftPane) },
                     onDropFiles: { copyDropped($0, into: leftPane) },
                     onCopyItems: { copyProviders(from: leftPane, cut: $0) },
                     onPasteItems: { paste($0, into: leftPane) }
@@ -56,6 +57,7 @@ struct ContentView: View {
                     isActive: activeSide == .right,
                     showTagColors: showTagColors,
                     onActivate: { activeSide = .right },
+                    onRename: { startRename(in: rightPane) },
                     onDropFiles: { copyDropped($0, into: rightPane) },
                     onCopyItems: { copyProviders(from: rightPane, cut: $0) },
                     onPasteItems: { paste($0, into: rightPane) }
@@ -102,10 +104,7 @@ struct ContentView: View {
             }
             .keyboardShortcut("n")
             toolButton("pencil", "Rename", help: "Rename selected item (⌘R)") {
-                if let item = active.selectedItems.first {
-                    renameText = item.name
-                    renameTarget = item
-                }
+                startRename(in: active)
             }
             .keyboardShortcut("r")
             .disabled(active.selection.count != 1)
@@ -442,6 +441,12 @@ struct ContentView: View {
         rightPane.reload()
     }
 
+    private func startRename(in pane: PaneModel) {
+        guard let item = pane.selectedItems.first else { return }
+        renameText = item.name
+        renameTarget = item
+    }
+
     private func performRename(_ item: FileItem) {
         defer { renameTarget = nil }
         let trimmed = renameText.trimmingCharacters(in: .whitespaces)
@@ -484,6 +489,7 @@ struct PaneView: View {
     let isActive: Bool
     let showTagColors: Bool
     let onActivate: () -> Void
+    let onRename: () -> Void
     let onDropFiles: ([URL]) -> Bool
     let onCopyItems: (Bool) -> [NSItemProvider]
     let onPasteItems: ([NSItemProvider]) -> Void
@@ -499,6 +505,7 @@ struct PaneView: View {
                 onCopy: { writeToPasteboard(cut: false) },
                 onCut: { writeToPasteboard(cut: true) },
                 onPaste: { pasteFromPasteboard() },
+                onRename: onRename,
                 onDrop: onDropFiles
             )
         }
