@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.4"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,14 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "1.5", date: "23 Jun 2026", changes: [
+            "Inline rename: rename in place by typing in the cell (Return to commit, Esc to cancel) — no more dialog",
+            "Open in Terminal added to the right-click menu",
+            "Locations menu (☁️) for quick access to iCloud Drive, OneDrive and other CloudStorage providers, Desktop, Documents and Downloads",
+            "Folders no longer pinned to the top when sorting by Size or Date — the real order is shown",
+            "Clearer error when a folder can't be read (iCloud/OneDrive need Full Disk Access), with a button to open the setting",
+            "Cloud folders open inside DualPane instead of bouncing to Finder",
+        ]),
         Release(version: "1.4", date: "12 Jun 2026", changes: [
             "Copy conflict dialog: when a file already exists at the destination, choose Replace (old file goes to Trash), Keep Both (numbered name), or Cancel — applies to toolbar copy/move, transfer arrows, drag & drop, and paste",
             "Rename… and Refresh added to the right-click menu",

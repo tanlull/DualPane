@@ -269,10 +269,13 @@ struct FileTableView: NSViewRepresentable {
             MainActor.assumeIsolated {
                 switch key {
                 case "name":
+                    parent.model.foldersFirst = true
                     parent.model.sortOrder = [KeyPathComparator(\FileItem.name, comparator: .localizedStandard, order: order)]
                 case "size":
+                    parent.model.foldersFirst = false
                     parent.model.sortOrder = [KeyPathComparator(\FileItem.size, order: order)]
                 case "modified":
+                    parent.model.foldersFirst = false
                     parent.model.sortOrder = [KeyPathComparator(\FileItem.modified, order: order)]
                 default:
                     break

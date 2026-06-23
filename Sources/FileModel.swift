@@ -117,6 +117,9 @@ final class PaneModel: ObservableObject {
     ] {
         didSet { applySort() }
     }
+    // Keep folders on top only when sorting by name. When sorting by size or
+    // date, sort every item together so the real order shows.
+    var foldersFirst = true
 
     // Bumped whenever items actually change, so the table view can skip
     // expensive array comparisons on selection-only updates.
@@ -246,9 +249,13 @@ final class PaneModel: ObservableObject {
     }
 
     private func applySort() {
-        let dirs = items.filter(\.isDirectory).sorted(using: sortOrder)
-        let files = items.filter { !$0.isDirectory }.sorted(using: sortOrder)
-        items = dirs + files
+        if foldersFirst {
+            let dirs = items.filter(\.isDirectory).sorted(using: sortOrder)
+            let files = items.filter { !$0.isDirectory }.sorted(using: sortOrder)
+            items = dirs + files
+        } else {
+            items = items.sorted(using: sortOrder)
+        }
         revision += 1
     }
 
