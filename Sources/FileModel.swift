@@ -99,6 +99,12 @@ final class PaneModel: ObservableObject {
     @Published var items: [FileItem] = []
     @Published var selection = Set<URL>()
     @Published var pathText: String
+    // Set when the current directory couldn't be read (e.g. a TCC-protected
+    // iCloud/CloudStorage folder without Full Disk Access). nil when fine.
+    @Published var loadError: String?
+    // Set to a row's URL to begin inline (in-cell) renaming of that item.
+    // The table view consumes it and clears it back to nil.
+    @Published var renameRequest: URL?
     @Published var showHidden = false {
         didSet { reload() }
     }
@@ -150,9 +156,17 @@ final class PaneModel: ObservableObject {
         var options: FileManager.DirectoryEnumerationOptions = []
         if !showHidden { options.insert(.skipsHiddenFiles) }
 
-        let urls = (try? fm.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: Array(Self.itemKeys), options: options)) ?? []
-        items = urls.map(makeItem(url:))
+        do {
+            let urls = try fm.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: Array(Self.itemKeys), options: options)
+            items = urls.map(makeItem(url:))
+            loadError = nil
+        } catch {
+            // Surface the failure instead of silently showing an empty pane —
+            // this is what users hit on iCloud Drive / OneDrive folders.
+            items = []
+            loadError = error.localizedDescription
+        }
         applySort()
         pathText = directory.path
         selection = selection.filter { sel in items.contains { $0.url == sel } }
@@ -280,7 +294,12 @@ final class PaneModel: ObservableObject {
     }
 
     func open(_ item: FileItem) {
-        if item.isDirectory {
+        // Re-check directory status at open time. For cloud placeholders the
+        // cached isDirectory flag can be wrong, which would otherwise hand the
+        // folder to Finder instead of navigating into it here.
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: item.url.path, isDirectory: &isDir)
+        if item.isDirectory || (exists && isDir.boolValue) {
             navigate(to: item.url)
         } else {
             NSWorkspace.shared.open(item.url)

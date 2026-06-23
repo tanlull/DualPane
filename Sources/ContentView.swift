@@ -21,8 +21,6 @@ struct ContentView: View {
     @StateObject private var favorites = FavoritesStore()
     @State private var activeSide: Side = .left
     @State private var errorMessage: String?
-    @State private var renameTarget: FileItem?
-    @State private var renameText = ""
     @State private var newFolderPrompt = false
     @State private var newFolderName = "New Folder"
     @State private var confirmDelete = false
@@ -58,6 +56,7 @@ struct ContentView: View {
                     showTagColors: showTagColors,
                     onActivate: { activeSide = .left },
                     onRename: { startRename(in: leftPane) },
+                    onCommitRename: { commitRename($0, to: $1) },
                     onDropFiles: { copyDropped($0, into: leftPane) },
                     onCopyItems: { copyProviders(from: leftPane, cut: $0) },
                     onPasteItems: { paste($0, into: leftPane) }
@@ -70,6 +69,7 @@ struct ContentView: View {
                     showTagColors: showTagColors,
                     onActivate: { activeSide = .right },
                     onRename: { startRename(in: rightPane) },
+                    onCommitRename: { commitRename($0, to: $1) },
                     onDropFiles: { copyDropped($0, into: rightPane) },
                     onCopyItems: { copyProviders(from: rightPane, cut: $0) },
                     onPasteItems: { paste($0, into: rightPane) }
@@ -104,11 +104,6 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Items will be moved to the Trash.")
-        }
-        .sheet(item: $renameTarget) { item in
-            namePrompt(title: "Rename “\(item.name)”", text: $renameText, confirm: "Rename") {
-                performRename(item)
-            }
         }
         .sheet(isPresented: $newFolderPrompt) {
             namePrompt(title: "New Folder", text: $newFolderName, confirm: "Create") {
@@ -258,7 +253,6 @@ struct ContentView: View {
                 .onSubmit { action() }
             HStack {
                 Button("Cancel") {
-                    renameTarget = nil
                     newFolderPrompt = false
                 }
                 .keyboardShortcut(.cancelAction)
@@ -475,19 +469,19 @@ struct ContentView: View {
         rightPane.reload()
     }
 
+    // Asks the pane's table to begin in-cell editing of the selected row.
     private func startRename(in pane: PaneModel) {
         guard let item = pane.selectedItems.first else { return }
-        renameText = item.name
-        renameTarget = item
+        pane.renameRequest = item.url
     }
 
-    private func performRename(_ item: FileItem) {
-        defer { renameTarget = nil }
-        let trimmed = renameText.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, trimmed != item.name else { return }
-        let dest = item.url.deletingLastPathComponent().appendingPathComponent(trimmed)
+    // Called by the table when in-cell editing commits with a new name.
+    private func commitRename(_ url: URL, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != url.lastPathComponent else { return }
+        let dest = url.deletingLastPathComponent().appendingPathComponent(trimmed)
         do {
-            try FileManager.default.moveItem(at: item.url, to: dest)
+            try FileManager.default.moveItem(at: url, to: dest)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -524,6 +518,7 @@ struct PaneView: View {
     let showTagColors: Bool
     let onActivate: () -> Void
     let onRename: () -> Void
+    let onCommitRename: (URL, String) -> Void
     let onDropFiles: ([URL]) -> Bool
     let onCopyItems: (Bool) -> [NSItemProvider]
     let onPasteItems: ([NSItemProvider]) -> Void
@@ -540,8 +535,14 @@ struct PaneView: View {
                 onCut: { writeToPasteboard(cut: true) },
                 onPaste: { pasteFromPasteboard() },
                 onRename: onRename,
+                onCommitRename: onCommitRename,
                 onDrop: onDropFiles
             )
+            .overlay {
+                if let error = model.loadError {
+                    loadErrorBanner(error)
+                }
+            }
         }
         .frame(minWidth: 380)
         .overlay(alignment: .top) {
@@ -551,12 +552,76 @@ struct PaneView: View {
         }
     }
 
+    @ViewBuilder
+    private func loadErrorBanner(_ error: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "lock.icloud")
+                .font(.system(size: 34))
+                .foregroundStyle(.secondary)
+            Text("Couldn’t read this folder")
+                .font(.headline)
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Text("iCloud Drive and OneDrive live under ~/Library and are protected by macOS. Grant DualPane access in System Settings → Privacy & Security → Full Disk Access, then click Refresh.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Open Full Disk Access Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(28)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding()
+    }
+
     private var filterTint: Color {
         guard let filter = model.tagFilter,
               let option = ContentView.tagOptions.first(where: { $0.number == filter }) else {
             return .secondary
         }
         return Color(nsColor: option.color)
+    }
+
+    // Standard + cloud locations that exist on this Mac. iCloud Drive and the
+    // CloudStorage providers (OneDrive, Dropbox, …) live under the hidden
+    // ~/Library, so this menu is the easy way to reach them.
+    static func locations() -> [(name: String, icon: String, url: URL)] {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        var result: [(String, String, URL)] = []
+
+        func add(_ name: String, _ icon: String, _ url: URL) {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                result.append((name, icon, url))
+            }
+        }
+
+        add("Desktop", "menubar.dock.rectangle", home.appendingPathComponent("Desktop"))
+        add("Documents", "doc", home.appendingPathComponent("Documents"))
+        add("Downloads", "arrow.down.circle", home.appendingPathComponent("Downloads"))
+        // Shown unconditionally: the existence check is itself blocked by macOS
+        // until Full Disk Access is granted, which would otherwise hide iCloud.
+        result.append(("iCloud Drive", "icloud",
+            home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")))
+
+        // Each subfolder of CloudStorage is a provider like "OneDrive-Personal".
+        let cloudStorage = home.appendingPathComponent("Library/CloudStorage")
+        if let providers = try? fm.contentsOfDirectory(
+            at: cloudStorage, includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]) {
+            for provider in providers.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                add(provider.lastPathComponent, "externaldrive.badge.icloud", provider)
+            }
+        }
+        return result.map { (name: $0.0, icon: $0.1, url: $0.2) }
     }
 
     private func writeToPasteboard(cut: Bool) {
@@ -584,6 +649,28 @@ struct PaneView: View {
                 Image(systemName: "house")
             }
             .help("Home")
+            Menu {
+                ForEach(Self.locations(), id: \.url) { location in
+                    Button {
+                        model.navigate(to: location.url)
+                    } label: {
+                        Label(location.name, systemImage: location.icon)
+                    }
+                }
+                Divider()
+                Button {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Label("Grant Full Disk Access…", systemImage: "lock.open")
+                }
+            } label: {
+                Image(systemName: "cloud")
+            }
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Jump to iCloud Drive, OneDrive, and other locations")
             Menu {
                 if favorites.folders.isEmpty {
                     Text("No favorites yet — click ★ to add the current folder")

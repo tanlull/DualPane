@@ -12,6 +12,7 @@ struct FileTableView: NSViewRepresentable {
     let onCut: () -> Void
     let onPaste: () -> Void
     let onRename: () -> Void
+    let onCommitRename: (URL, String) -> Void
     let onDrop: ([URL]) -> Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -108,11 +109,22 @@ struct FileTableView: NSViewRepresentable {
             table.selectRowIndexes(desired, byExtendingSelection: false)
             coordinator.isSyncingSelection = false
         }
+
+        // A rename was requested (toolbar/menu): begin in-cell editing of that row.
+        if let target = model.renameRequest,
+           let row = coordinator.items.firstIndex(where: { $0.url == target }) {
+            DispatchQueue.main.async {
+                model.renameRequest = nil
+                guard row < table.numberOfRows else { return }
+                table.scrollRowToVisible(row)
+                table.editColumn(0, row: row, with: nil, select: true)
+            }
+        }
     }
 
     // MARK: - Coordinator
 
-    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSTextFieldDelegate {
         var parent: FileTableView
         var items: [FileItem] = []
         var lastRevision = -1
@@ -166,6 +178,13 @@ struct FileTableView: NSViewRepresentable {
             cell.textField = text
 
             if identifier.rawValue == "name" {
+                // Editable so renaming happens in-cell (no dialog). Editing only
+                // begins when we call editColumn(_:row:…); commit/cancel is
+                // handled in controlTextDidEndEditing.
+                text.isEditable = true
+                text.isSelectable = true
+                text.focusRingType = .none
+                text.delegate = self
                 let image = NSImageView()
                 image.translatesAutoresizingMaskIntoConstraints = false
                 cell.addSubview(image)
@@ -225,6 +244,23 @@ struct FileTableView: NSViewRepresentable {
             MainActor.assumeIsolated { parent.model.open(item) }
         }
 
+        // MARK: Inline rename
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField, let table = tableView else { return }
+            let row = table.row(for: field)
+            guard row >= 0, row < items.count else { return }
+            let item = items[row]
+            // Esc cancels: revert the text and don't rename.
+            let movement = (obj.userInfo?["NSTextMovement"] as? Int) ?? 0
+            if movement == NSTextMovement.cancel.rawValue {
+                field.stringValue = item.name
+                return
+            }
+            let newName = field.stringValue
+            MainActor.assumeIsolated { parent.onCommitRename(item.url, newName) }
+        }
+
         // MARK: Sorting
 
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
@@ -277,6 +313,7 @@ struct FileTableView: NSViewRepresentable {
             menu.autoenablesItems = false
             menu.addItem(makeMenuItem("Open", #selector(menuOpen)))
             menu.addItem(makeMenuItem("Reveal in Finder", #selector(menuReveal)))
+            menu.addItem(makeMenuItem("Open in Terminal", #selector(menuTerminal)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("Rename…", #selector(menuRename)))
             menu.addItem(.separator())
@@ -322,6 +359,21 @@ struct FileTableView: NSViewRepresentable {
             guard let table = tableView else { return }
             let urls = table.selectedRowIndexes.compactMap { $0 < items.count ? items[$0].url : nil }
             NSWorkspace.shared.activateFileViewerSelecting(urls)
+        }
+
+        @objc func menuTerminal(_ sender: Any?) {
+            MainActor.assumeIsolated {
+                // Open the clicked folder if one folder is selected, else the
+                // pane's current directory ("open terminal here").
+                let folders = (tableView?.selectedRowIndexes ?? [])
+                    .compactMap { $0 < items.count ? items[$0] : nil }
+                    .filter(\.isDirectory)
+                let dir = folders.count == 1 ? folders[0].url : parent.model.directory
+                guard let term = NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: "com.apple.Terminal") else { return }
+                NSWorkspace.shared.open([dir], withApplicationAt: term,
+                                        configuration: NSWorkspace.OpenConfiguration())
+            }
         }
 
         @objc func menuRename(_ sender: Any?) { parent.onRename() }
