@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.6"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "1.6", date: "27 Jun 2026", changes: [
+            "Multiple tabs per pane: open, switch, and close tabs independently in each pane (⌘T new tab, ⌘W close tab)",
+            "Each pane's tab bar has its own Refresh, New Folder, and New File buttons that act on that tab",
+            "Tabs and the active tab are remembered per pane across launches",
+        ]),
         Release(version: "1.5", date: "23 Jun 2026", changes: [
             "Inline rename: rename in place by typing in the cell (Return to commit, Esc to cancel) — no more dialog",
             "Open in Terminal added to the right-click menu",

@@ -5,24 +5,25 @@ import UniformTypeIdentifiers
 enum Side { case left, right }
 
 struct ContentView: View {
-    @StateObject private var leftPane = PaneModel(
-        directory: PaneModel.restoredDirectory(
+    @StateObject private var leftTabs = PaneTabsModel(
+        initialDirectory: PaneModel.restoredDirectory(
             key: "leftPaneDirectory",
             fallback: FileManager.default.homeDirectoryForCurrentUser),
-        persistKey: "leftPaneDirectory"
+        persistKey: "leftPane"
     )
-    @StateObject private var rightPane = PaneModel(
-        directory: PaneModel.restoredDirectory(
+    @StateObject private var rightTabs = PaneTabsModel(
+        initialDirectory: PaneModel.restoredDirectory(
             key: "rightPaneDirectory",
             fallback: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
                 ?? FileManager.default.homeDirectoryForCurrentUser),
-        persistKey: "rightPaneDirectory"
+        persistKey: "rightPane"
     )
     @StateObject private var favorites = FavoritesStore()
     @State private var activeSide: Side = .left
     @State private var errorMessage: String?
-    @State private var newFolderPrompt = false
-    @State private var newFolderName = "New Folder"
+    @State private var newItemPrompt = false
+    @State private var newItemName = "New Folder"
+    @State private var newItemIsFile = false
     @State private var confirmDelete = false
     @State private var cutURLs = Set<URL>()
     @AppStorage("showTagColors") private var showTagColors = true
@@ -41,8 +42,11 @@ struct ContentView: View {
         var side: Side?
     }
 
+    private var leftPane: PaneModel { leftTabs.current }
+    private var rightPane: PaneModel { rightTabs.current }
     private var active: PaneModel { activeSide == .left ? leftPane : rightPane }
     private var inactive: PaneModel { activeSide == .left ? rightPane : leftPane }
+    private func tabs(for side: Side) -> PaneTabsModel { side == .left ? leftTabs : rightTabs }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,6 +55,7 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 PaneView(
                     model: leftPane,
+                    tabs: leftTabs,
                     favorites: favorites,
                     isActive: activeSide == .left,
                     showTagColors: showTagColors,
@@ -59,11 +64,14 @@ struct ContentView: View {
                     onCommitRename: { commitRename($0, to: $1) },
                     onDropFiles: { copyDropped($0, into: leftPane) },
                     onCopyItems: { copyProviders(from: leftPane, cut: $0) },
-                    onPasteItems: { paste($0, into: leftPane) }
+                    onPasteItems: { paste($0, into: leftPane) },
+                    onNewFolder: { presentNewItem(in: .left, isFile: false) },
+                    onNewFile: { presentNewItem(in: .left, isFile: true) }
                 )
                 transferStrip
                 PaneView(
                     model: rightPane,
+                    tabs: rightTabs,
                     favorites: favorites,
                     isActive: activeSide == .right,
                     showTagColors: showTagColors,
@@ -72,7 +80,9 @@ struct ContentView: View {
                     onCommitRename: { commitRename($0, to: $1) },
                     onDropFiles: { copyDropped($0, into: rightPane) },
                     onCopyItems: { copyProviders(from: rightPane, cut: $0) },
-                    onPasteItems: { paste($0, into: rightPane) }
+                    onPasteItems: { paste($0, into: rightPane) },
+                    onNewFolder: { presentNewItem(in: .right, isFile: false) },
+                    onNewFile: { presentNewItem(in: .right, isFile: true) }
                 )
             }
             Divider()
@@ -105,10 +115,23 @@ struct ContentView: View {
         } message: {
             Text("Items will be moved to the Trash.")
         }
-        .sheet(isPresented: $newFolderPrompt) {
-            namePrompt(title: "New Folder", text: $newFolderName, confirm: "Create") {
-                performNewFolder()
+        .sheet(isPresented: $newItemPrompt) {
+            namePrompt(title: newItemIsFile ? "New File" : "New Folder", text: $newItemName, confirm: "Create") {
+                performNewItem()
             }
+        }
+        .background {
+            Button("") { tabs(for: activeSide).addTab() }
+                .keyboardShortcut("t", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+            Button("") {
+                let model = tabs(for: activeSide)
+                model.closeTab(model.selectedIndex)
+            }
+            .keyboardShortcut("w", modifiers: .command)
+            .frame(width: 0, height: 0)
+            .opacity(0)
         }
     }
 
@@ -122,8 +145,7 @@ struct ContentView: View {
                 .keyboardShortcut("m")
             Divider().frame(height: 22)
             toolButton("folder.badge.plus", "New Folder", help: "Create folder in active pane (⌘N)") {
-                newFolderName = "New Folder"
-                newFolderPrompt = true
+                presentNewItem(in: activeSide, isFile: false)
             }
             .keyboardShortcut("n")
             toolButton("pencil", "Rename", help: "Rename selected item (⌘R)") {
@@ -253,7 +275,7 @@ struct ContentView: View {
                 .onSubmit { action() }
             HStack {
                 Button("Cancel") {
-                    newFolderPrompt = false
+                    newItemPrompt = false
                 }
                 .keyboardShortcut(.cancelAction)
                 Button(confirm) { action() }
@@ -489,13 +511,31 @@ struct ContentView: View {
         rightPane.reload()
     }
 
-    private func performNewFolder() {
-        defer { newFolderPrompt = false }
-        let trimmed = newFolderName.trimmingCharacters(in: .whitespaces)
+    private func presentNewItem(in side: Side, isFile: Bool) {
+        activeSide = side
+        newItemIsFile = isFile
+        newItemName = isFile ? "New File.txt" : "New Folder"
+        newItemPrompt = true
+    }
+
+    private func performNewItem() {
+        defer { newItemPrompt = false }
+        let trimmed = newItemName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         let dest = active.directory.appendingPathComponent(trimmed)
         do {
-            try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: false)
+            if newItemIsFile {
+                guard !FileManager.default.fileExists(atPath: dest.path) else {
+                    errorMessage = "An item named “\(trimmed)” already exists."
+                    return
+                }
+                guard FileManager.default.createFile(atPath: dest.path, contents: Data()) else {
+                    errorMessage = "Couldn’t create the file."
+                    return
+                }
+            } else {
+                try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: false)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -513,6 +553,7 @@ struct ContentView: View {
 
 struct PaneView: View {
     @ObservedObject var model: PaneModel
+    @ObservedObject var tabs: PaneTabsModel
     @ObservedObject var favorites: FavoritesStore
     let isActive: Bool
     let showTagColors: Bool
@@ -522,9 +563,13 @@ struct PaneView: View {
     let onDropFiles: ([URL]) -> Bool
     let onCopyItems: (Bool) -> [NSItemProvider]
     let onPasteItems: ([NSItemProvider]) -> Void
+    let onNewFolder: () -> Void
+    let onNewFile: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
+            tabBar
+            Divider()
             pathBar
             Divider()
             FileTableView(
@@ -637,6 +682,89 @@ struct PaneView: View {
               !objects.isEmpty else { return }
         let providers = objects.compactMap { ($0 as? NSURL).map { NSItemProvider(object: $0) } }
         onPasteItems(providers)
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(Array(tabs.tabs.enumerated()), id: \.element.id) { index, tab in
+                        tabChip(tab: tab, index: index)
+                    }
+                }
+            }
+            Button {
+                onActivate()
+                tabs.addTab()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .help("New Tab (⌘T)")
+            Spacer(minLength: 8)
+            Button {
+                onActivate()
+                model.reload()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .help("Refresh this tab")
+            Button {
+                onActivate()
+                onNewFolder()
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .help("New Folder in this tab")
+            Button {
+                onActivate()
+                onNewFile()
+            } label: {
+                Image(systemName: "doc.badge.plus")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .help("New File in this tab")
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(isActive ? Color.accentColor.opacity(0.05) : Color.clear)
+    }
+
+    private func tabChip(tab: PaneModel, index: Int) -> some View {
+        let isSelected = index == tabs.selectedIndex
+        return HStack(spacing: 6) {
+            Image(systemName: "folder")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Text(tab.directory.lastPathComponent.isEmpty ? "/" : tab.directory.lastPathComponent)
+                .font(.body)
+                .lineLimit(1)
+            if tabs.tabs.count > 1 {
+                Button {
+                    tabs.closeTab(index)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onActivate()
+            tabs.select(index)
+        }
+        .help(tab.directory.path)
     }
 
     private var pathBar: some View {

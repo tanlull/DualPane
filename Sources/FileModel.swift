@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 // Caches icons by file type instead of asking NSWorkspace per file —
@@ -92,7 +93,8 @@ struct FileItem: Identifiable, Hashable {
 }
 
 @MainActor
-final class PaneModel: ObservableObject {
+final class PaneModel: ObservableObject, Identifiable {
+    let id = UUID()
     @Published var directory: URL {
         didSet { persistDirectory() }
     }
@@ -329,5 +331,87 @@ final class PaneModel: ObservableObject {
             text += "  •  \(selection.count) selected (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)))"
         }
         return text
+    }
+}
+
+// Manages a row of tabs for one pane. Each tab is its own PaneModel with its
+// own directory, history, selection, etc.
+@MainActor
+final class PaneTabsModel: ObservableObject {
+    @Published var tabs: [PaneModel]
+    @Published var selectedIndex: Int
+
+    private let persistKey: String?
+    private var cancellables = Set<AnyCancellable>()
+
+    var current: PaneModel { tabs[selectedIndex] }
+
+    init(initialDirectory: URL, persistKey: String?) {
+        self.persistKey = persistKey
+        if let persistKey, let restored = Self.restoredState(key: persistKey) {
+            self.tabs = restored.paths.map { PaneModel(directory: $0) }
+            self.selectedIndex = restored.selected
+        } else {
+            self.tabs = [PaneModel(directory: initialDirectory)]
+            self.selectedIndex = 0
+        }
+        tabs.forEach(observe)
+    }
+
+    func addTab(startingAt url: URL? = nil) {
+        let tab = PaneModel(directory: url ?? current.directory)
+        observe(tab)
+        tabs.append(tab)
+        selectedIndex = tabs.count - 1
+        persist()
+    }
+
+    func closeTab(_ index: Int) {
+        guard tabs.count > 1, tabs.indices.contains(index) else { return }
+        tabs.remove(at: index)
+        if selectedIndex >= tabs.count {
+            selectedIndex = tabs.count - 1
+        } else if selectedIndex > index {
+            selectedIndex -= 1
+        }
+        persist()
+    }
+
+    func select(_ index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        selectedIndex = index
+        persist()
+    }
+
+    private func observe(_ tab: PaneModel) {
+        tab.$directory
+            .dropFirst()
+            .sink { [weak self] _ in self?.persist() }
+            .store(in: &cancellables)
+    }
+
+    private struct SavedState: Codable {
+        var paths: [String]
+        var selected: Int
+    }
+
+    private static func restoredState(key: String) -> (paths: [URL], selected: Int)? {
+        guard let data = UserDefaults.standard.data(forKey: key + "Tabs"),
+              let saved = try? JSONDecoder().decode(SavedState.self, from: data) else { return nil }
+        let fm = FileManager.default
+        let valid = saved.paths.filter { path in
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+        }
+        guard !valid.isEmpty else { return nil }
+        return (valid.map { URL(fileURLWithPath: $0) }, min(max(saved.selected, 0), valid.count - 1))
+    }
+
+    private func persist() {
+        guard let persistKey else { return }
+        let saved = SavedState(paths: tabs.map { $0.directory.path }, selected: selectedIndex)
+        if let data = try? JSONEncoder().encode(saved) {
+            UserDefaults.standard.set(data, forKey: persistKey + "Tabs")
+        }
     }
 }
