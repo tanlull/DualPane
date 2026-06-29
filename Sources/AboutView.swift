@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.6"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.7"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,12 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "1.7", date: "30 Jun 2026", changes: [
+            "Fixed a serious data-loss bug where copying a folder between panes could send the original to the Trash — copies now compare source and destination by real file identity (not path text), so iCloud/OneDrive path aliases, symlinks and firmlinks can never make a copy delete its own source",
+            "Replace-on-conflict is now safe: the new item is copied in fully before the old one is moved to the Trash, so a failed copy never loses data",
+            "Online-only iCloud items are downloaded before copying, so copies are complete instead of empty placeholders",
+            "iCloud/OneDrive access now sticks: the app is signed with a stable identity (build-app.sh) instead of ad-hoc, so the Full Disk Access grant no longer breaks on every rebuild",
+        ]),
         Release(version: "1.6", date: "27 Jun 2026", changes: [
             "Multiple tabs per pane: open, switch, and close tabs independently in each pane (⌘T new tab, ⌘W close tab)",
             "Each pane's tab bar has its own Refresh, New Folder, and New File buttons that act on that tab",

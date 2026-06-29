@@ -79,11 +79,13 @@ struct FileTableView: NSViewRepresentable {
         coordinator.parent = self
         guard let table = scrollView.documentView as? PaneTableView else { return }
 
-        let directoryChanged = coordinator.lastDirectory != model.directory
+        let modelChanged = coordinator.lastModelID != model.id
+        let directoryChanged = modelChanged || coordinator.lastDirectory != model.directory
         coordinator.lastDirectory = model.directory
+        coordinator.lastModelID = model.id
 
         var needsReload = false
-        if coordinator.lastRevision != model.revision {
+        if modelChanged || coordinator.lastRevision != model.revision {
             coordinator.lastRevision = model.revision
             coordinator.items = model.items
             needsReload = true
@@ -131,6 +133,7 @@ struct FileTableView: NSViewRepresentable {
         var showTagColors = true
         var isSyncingSelection = false
         var lastDirectory: URL?
+        var lastModelID: UUID?
         weak var tableView: NSTableView?
 
         init(_ parent: FileTableView) {

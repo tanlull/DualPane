@@ -4,6 +4,51 @@ import UniformTypeIdentifiers
 
 enum Side { case left, right }
 
+// MARK: - Safe-transfer helpers
+//
+// A copy must never be able to delete its own source. Comparing destination
+// and source by *path strings* is not enough: symlinks, firmlinks, case-
+// insensitive volumes and the iCloud/OneDrive path aliases your files live
+// behind can all make the same underlying folder look like two different
+// paths. `dpIsSameItem` compares by the file system's own identity instead.
+fileprivate func dpIsSameItem(_ a: URL, _ b: URL) -> Bool {
+    let key: Set<URLResourceKey> = [.fileResourceIdentifierKey]
+    if let ra = (try? a.resourceValues(forKeys: key))?.fileResourceIdentifier,
+       let rb = (try? b.resourceValues(forKeys: key))?.fileResourceIdentifier {
+        if ra.isEqual(rb) { return true }
+    }
+    return a.resolvingSymlinksInPath().standardizedFileURL.path
+         == b.resolvingSymlinksInPath().standardizedFileURL.path
+}
+
+// Online-only iCloud items must be downloaded before they're copied, otherwise
+// the copy is silently incomplete (you get an empty placeholder, not the data).
+// Best-effort: trigger the download and wait, with a bounded timeout so a huge
+// or stalled item can never hang the operation.
+fileprivate func dpMaterialize(_ url: URL, fm: FileManager) {
+    let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
+    var pending: [URL] = []
+    func consider(_ u: URL) {
+        guard let v = try? u.resourceValues(forKeys: keys), v.isUbiquitousItem == true else { return }
+        if v.ubiquitousItemDownloadingStatus != .current {
+            try? fm.startDownloadingUbiquitousItem(at: u)
+            pending.append(u)
+        }
+    }
+    consider(url)
+    if let e = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
+        for case let child as URL in e { consider(child) }
+    }
+    let deadline = Date().addingTimeInterval(60)
+    for u in pending where Date() < deadline {
+        while Date() < deadline {
+            let status = (try? u.resourceValues(forKeys: keys))?.ubiquitousItemDownloadingStatus
+            if status == .current { break }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+    }
+}
+
 struct ContentView: View {
     @StateObject private var leftTabs = PaneTabsModel(
         initialDirectory: PaneModel.restoredDirectory(
@@ -318,31 +363,59 @@ struct ContentView: View {
             let started = Date()
             for url in request.sources {
                 do {
+                    // Download online-only iCloud contents first so the copy is complete.
+                    dpMaterialize(url, fm: fm)
+
                     let plain = request.destDir.appendingPathComponent(url.lastPathComponent)
-                    var target = plain
-                    if fm.fileExists(atPath: plain.path) {
-                        if plain.standardizedFileURL.path == url.standardizedFileURL.path {
-                            // Source and destination are the same file
-                            if request.move { continue }
-                            target = resolveDestination(url, request.destDir)
-                        } else {
-                            switch choice {
-                            case .replace:
-                                try fm.trashItem(at: plain, resultingItemURL: nil)
-                            case .keepBoth:
-                                target = resolveDestination(url, request.destDir)
-                            }
-                        }
-                    }
-                    if request.move {
-                        try fm.moveItem(at: url, to: target)
-                    } else {
+                    let destExists = fm.fileExists(atPath: plain.path)
+
+                    // Safety guard: if the destination is the *same underlying item*
+                    // as the source (even via a symlink / firmlink / iCloud alias),
+                    // never replace it — that would trash the source. Copy beside it
+                    // with a numbered name; a move onto itself is a no-op.
+                    if destExists && dpIsSameItem(url, plain) {
+                        if request.move { continue }
+                        let target = resolveDestination(url, request.destDir)
                         try fm.copyItem(at: url, to: target)
+                        if request.touchDates {
+                            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
+                        }
+                        results.append(target)
+                        continue
                     }
-                    if request.touchDates {
-                        try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
+
+                    if destExists && choice == .replace {
+                        // Replace safely: copy/move into a temporary name FIRST, and
+                        // only trash the old item and swap the new one in once that has
+                        // fully succeeded. If anything fails, nothing is lost.
+                        let temp = resolveDestination(url, request.destDir)
+                        if request.move {
+                            try fm.moveItem(at: url, to: temp)
+                        } else {
+                            try fm.copyItem(at: url, to: temp)
+                        }
+                        // Never trash something that is actually the source.
+                        if !dpIsSameItem(plain, url) {
+                            try? fm.trashItem(at: plain, resultingItemURL: nil)
+                        }
+                        try fm.moveItem(at: temp, to: plain)
+                        if request.touchDates {
+                            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: plain.path)
+                        }
+                        results.append(plain)
+                    } else {
+                        // No conflict, or "Keep Both": copy/move to a fresh name.
+                        let target = destExists ? resolveDestination(url, request.destDir) : plain
+                        if request.move {
+                            try fm.moveItem(at: url, to: target)
+                        } else {
+                            try fm.copyItem(at: url, to: target)
+                        }
+                        if request.touchDates {
+                            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
+                        }
+                        results.append(target)
                     }
-                    results.append(target)
                 } catch {
                     failure = error.localizedDescription
                 }
