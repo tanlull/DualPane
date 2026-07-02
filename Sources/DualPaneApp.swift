@@ -23,8 +23,18 @@ struct DualPaneApp: App {
 
 struct AppCommands: Commands {
     @Environment(\.openWindow) private var openWindow
+    @ObservedObject private var undoStore = UndoStore.shared
 
     var body: some Commands {
+        // File-operation undo (⌘Z): replaces the default text-undo menu item so
+        // the shortcut reaches UndoStore instead of an empty NSUndoManager.
+        CommandGroup(replacing: .undoRedo) {
+            Button(undoStore.undoTitle) {
+                undoStore.undo()
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(!undoStore.canUndo)
+        }
         CommandGroup(replacing: .appInfo) {
             Button("About \(AppInfo.name)") {
                 openWindow(id: "about")

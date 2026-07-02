@@ -64,6 +64,7 @@ struct ContentView: View {
         persistKey: "rightPane"
     )
     @StateObject private var favorites = FavoritesStore()
+    @ObservedObject private var undoStore = UndoStore.shared
     @State private var activeSide: Side = .left
     @State private var errorMessage: String?
     @State private var newItemPrompt = false
@@ -108,6 +109,7 @@ struct ContentView: View {
                     onRename: { startRename(in: leftPane) },
                     onCommitRename: { commitRename($0, to: $1) },
                     onDropFiles: { copyDropped($0, into: leftPane) },
+                    onDropInto: { dropInto($0, folder: $1, move: $2) },
                     onCopyItems: { copyProviders(from: leftPane, cut: $0) },
                     onPasteItems: { paste($0, into: leftPane) },
                     onNewFolder: { presentNewItem(in: .left, isFile: false) },
@@ -124,6 +126,7 @@ struct ContentView: View {
                     onRename: { startRename(in: rightPane) },
                     onCommitRename: { commitRename($0, to: $1) },
                     onDropFiles: { copyDropped($0, into: rightPane) },
+                    onDropInto: { dropInto($0, folder: $1, move: $2) },
                     onCopyItems: { copyProviders(from: rightPane, cut: $0) },
                     onPasteItems: { paste($0, into: rightPane) },
                     onNewFolder: { presentNewItem(in: .right, isFile: false) },
@@ -165,6 +168,13 @@ struct ContentView: View {
                 performNewItem()
             }
         }
+        .onAppear {
+            UndoStore.shared.onDidUndo = {
+                leftPane.reload()
+                rightPane.reload()
+            }
+            UndoStore.shared.onError = { errorMessage = $0 }
+        }
         .background {
             Button("") { tabs(for: activeSide).addTab() }
                 .keyboardShortcut("t", modifiers: .command)
@@ -201,6 +211,10 @@ struct ContentView: View {
             toolButton("trash", "Delete", help: "Move selection to Trash (⌘⌫)") { confirmDelete = true }
                 .keyboardShortcut(.delete)
                 .disabled(active.selection.isEmpty)
+            toolButton("arrow.uturn.backward", "Undo", help: "\(undoStore.undoTitle) (⌘Z)") {
+                undoStore.undo()
+            }
+            .disabled(!undoStore.canUndo)
             Divider().frame(height: 22)
             toolButton("arrow.left.arrow.right", "Swap", help: "Swap pane directories") { swapPanes() }
             Spacer()
@@ -358,7 +372,7 @@ struct ContentView: View {
 
         Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
-            var results: [URL] = []
+            var results: [(src: URL, dst: URL)] = []
             var failure: String?
             let started = Date()
             for url in request.sources {
@@ -380,7 +394,7 @@ struct ContentView: View {
                         if request.touchDates {
                             try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
                         }
-                        results.append(target)
+                        results.append((src: url, dst: target))
                         continue
                     }
 
@@ -402,7 +416,7 @@ struct ContentView: View {
                         if request.touchDates {
                             try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: plain.path)
                         }
-                        results.append(plain)
+                        results.append((src: url, dst: plain))
                     } else {
                         // No conflict, or "Keep Both": copy/move to a fresh name.
                         let target = destExists ? resolveDestination(url, request.destDir) : plain
@@ -414,7 +428,7 @@ struct ContentView: View {
                         if request.touchDates {
                             try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
                         }
-                        results.append(target)
+                        results.append((src: url, dst: target))
                     }
                 } catch {
                     failure = error.localizedDescription
@@ -432,9 +446,12 @@ struct ContentView: View {
             await MainActor.run {
                 transferring = nil
                 errorMessage = failureResult
+                if !copied.isEmpty {
+                    UndoStore.shared.record(.transfer(move: request.move, pairs: copied))
+                }
                 leftPane.reload()
                 rightPane.reload()
-                request.highlightIn?.selection = Set(copied)
+                request.highlightIn?.selection = Set(copied.map { $0.dst })
             }
         }
     }
@@ -543,6 +560,21 @@ struct ContentView: View {
         submitTransfer(TransferRequest(sources: sources, destDir: destDir, move: isMove))
     }
 
+    // Drop onto a folder row: move (same-pane drag) or copy (from the other
+    // pane / another app) the items into that folder. The table already
+    // pre-filtered impossible targets; re-check here with real file identity.
+    private func dropInto(_ urls: [URL], folder: URL, move: Bool) -> Bool {
+        let folderPath = folder.standardizedFileURL.path
+        let sources = urls.filter(\.isFileURL).filter { url in
+            !dpIsSameItem(url, folder)
+                && !folderPath.hasPrefix(url.standardizedFileURL.path + "/")
+                && url.deletingLastPathComponent().standardizedFileURL.path != folderPath
+        }
+        guard !sources.isEmpty else { return false }
+        submitTransfer(TransferRequest(sources: sources, destDir: folder, move: move))
+        return true
+    }
+
     private func copyDropped(_ urls: [URL], into pane: PaneModel) -> Bool {
         let fileURLs = urls.filter(\.isFileURL)
             .filter { $0.deletingLastPathComponent().standardizedFileURL.path != pane.directory.standardizedFileURL.path }
@@ -553,12 +585,20 @@ struct ContentView: View {
 
     private func deleteSelection() {
         let fm = FileManager.default
+        var trashed: [(original: URL, trash: URL)] = []
         do {
             for item in active.selectedItems {
-                try fm.trashItem(at: item.url, resultingItemURL: nil)
+                var result: NSURL?
+                try fm.trashItem(at: item.url, resultingItemURL: &result)
+                if let trashURL = result as URL? {
+                    trashed.append((original: item.url, trash: trashURL))
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
+        }
+        if !trashed.isEmpty {
+            UndoStore.shared.record(.trash(pairs: trashed))
         }
         leftPane.reload()
         rightPane.reload()
@@ -577,6 +617,7 @@ struct ContentView: View {
         let dest = url.deletingLastPathComponent().appendingPathComponent(trimmed)
         do {
             try FileManager.default.moveItem(at: url, to: dest)
+            UndoStore.shared.record(.rename(from: url, to: dest))
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -606,8 +647,10 @@ struct ContentView: View {
                     errorMessage = "Couldn’t create the file."
                     return
                 }
+                UndoStore.shared.record(.create(dest))
             } else {
                 try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: false)
+                UndoStore.shared.record(.create(dest))
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -634,6 +677,7 @@ struct PaneView: View {
     let onRename: () -> Void
     let onCommitRename: (URL, String) -> Void
     let onDropFiles: ([URL]) -> Bool
+    let onDropInto: ([URL], URL, Bool) -> Bool
     let onCopyItems: (Bool) -> [NSItemProvider]
     let onPasteItems: ([NSItemProvider]) -> Void
     let onNewFolder: () -> Void
@@ -654,7 +698,10 @@ struct PaneView: View {
                 onPaste: { pasteFromPasteboard() },
                 onRename: onRename,
                 onCommitRename: onCommitRename,
-                onDrop: onDropFiles
+                onDrop: onDropFiles,
+                onDropInto: onDropInto,
+                onNewFolder: onNewFolder,
+                onNewFile: onNewFile
             )
             .overlay {
                 if let error = model.loadError {

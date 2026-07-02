@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.7"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.8"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "1.8", date: "2 Jul 2026", changes: [
+            "Undo (⌘Z, also in the toolbar and Edit menu) for file operations: move, copy, rename, delete, and new file/folder — deletes are restored from the Trash, and undo never overwrites existing items",
+            "New Folder and New File added to the right-click menu",
+            "Drag & drop within the same pane: drop files or folders onto a folder row to move them into it (dropping from the other pane or another app copies them in)",
+        ]),
         Release(version: "1.7", date: "30 Jun 2026", changes: [
             "Fixed a serious data-loss bug where copying a folder between panes could send the original to the Trash — copies now compare source and destination by real file identity (not path text), so iCloud/OneDrive path aliases, symlinks and firmlinks can never make a copy delete its own source",
             "Replace-on-conflict is now safe: the new item is copied in fully before the old one is moved to the Trash, so a failed copy never loses data",

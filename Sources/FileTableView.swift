@@ -14,6 +14,9 @@ struct FileTableView: NSViewRepresentable {
     let onRename: () -> Void
     let onCommitRename: (URL, String) -> Void
     let onDrop: ([URL]) -> Bool
+    let onDropInto: ([URL], URL, Bool) -> Bool // urls, destination folder, move
+    let onNewFolder: () -> Void
+    let onNewFile: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -57,6 +60,7 @@ struct FileTableView: NSViewRepresentable {
         table.doubleAction = #selector(Coordinator.doubleClicked(_:))
         table.registerForDraggedTypes([.fileURL])
         table.setDraggingSourceOperationMask(.copy, forLocal: false)
+        table.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
         table.menu = context.coordinator.buildMenu()
 
         let coordinator = context.coordinator
@@ -295,11 +299,48 @@ struct FileTableView: NSViewRepresentable {
 
         // MARK: Drop target
 
+        // A folder row can accept `urls` only if none of them *is* that folder,
+        // contains it, or already lives directly inside it. Path-prefix checks
+        // are a conservative pre-filter; the transfer itself re-validates with
+        // real file identity (dpIsSameItem) before touching anything.
+        private func canDrop(_ urls: [URL], into folder: URL) -> Bool {
+            let folderPath = folder.standardizedFileURL.path
+            for url in urls {
+                let path = url.standardizedFileURL.path
+                if path == folderPath { return false }                       // folder onto itself
+                if folderPath.hasPrefix(path + "/") { return false }        // into its own subfolder
+                if url.deletingLastPathComponent().standardizedFileURL.path == folderPath { return false } // already there
+            }
+            return true
+        }
+
+        private func folderTarget(for urls: [URL], row: Int) -> FileItem? {
+            guard row >= 0, row < items.count else { return nil }
+            let item = items[row]
+            guard item.isDirectory, canDrop(urls, into: item.url) else { return nil }
+            return item
+        }
+
         func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo,
                        proposedRow row: Int, proposedDropOperation: NSTableView.DropOperation) -> NSDragOperation {
-            if let source = info.draggingSource as? NSTableView, source === tableView { return [] }
-            guard info.draggingPasteboard.canReadObject(
-                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else { return [] }
+            guard let urls = info.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+                !urls.isEmpty else { return [] }
+            let sameTable = (info.draggingSource as? NSTableView) === tableView
+
+            // Hovering over a folder row: drop *into* that folder — a move when
+            // the drag started in this same pane, a copy when it came from the
+            // other pane or another app.
+            if let target = folderTarget(for: urls, row: row) {
+                if let targetRow = items.firstIndex(of: target) {
+                    tableView.setDropRow(targetRow, dropOperation: .on)
+                }
+                return sameTable ? .move : .copy
+            }
+
+            // Anywhere else in the same pane is a no-op (the items are already here).
+            if sameTable { return [] }
+
             tableView.setDropRow(-1, dropOperation: .on)
             return .copy
         }
@@ -308,6 +349,11 @@ struct FileTableView: NSViewRepresentable {
                        row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
             guard let urls = info.draggingPasteboard.readObjects(
                 forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return false }
+            let sameTable = (info.draggingSource as? NSTableView) === tableView
+            if dropOperation == .on, let target = folderTarget(for: urls, row: row) {
+                return parent.onDropInto(urls, target.url, sameTable)
+            }
+            if sameTable { return false }
             return parent.onDrop(urls)
         }
 
@@ -322,6 +368,9 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Open in Terminal", #selector(menuTerminal)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("Rename…", #selector(menuRename)))
+            menu.addItem(.separator())
+            menu.addItem(makeMenuItem("New Folder", #selector(menuNewFolder)))
+            menu.addItem(makeMenuItem("New File", #selector(menuNewFile)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("Copy", #selector(menuCopy)))
             menu.addItem(makeMenuItem("Cut", #selector(menuCut)))
@@ -383,6 +432,14 @@ struct FileTableView: NSViewRepresentable {
         }
 
         @objc func menuRename(_ sender: Any?) { parent.onRename() }
+
+        @objc func menuNewFolder(_ sender: Any?) {
+            MainActor.assumeIsolated { parent.onActivate(); parent.onNewFolder() }
+        }
+
+        @objc func menuNewFile(_ sender: Any?) {
+            MainActor.assumeIsolated { parent.onActivate(); parent.onNewFile() }
+        }
 
         @objc func menuRefresh(_ sender: Any?) {
             MainActor.assumeIsolated { parent.model.reload() }
