@@ -27,6 +27,17 @@ fileprivate func dpIsSameItem(_ a: URL, _ b: URL) -> Bool {
 // or stalled item can never hang the operation.
 fileprivate func dpMaterialize(_ url: URL, fm: FileManager) {
     let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
+
+    // Fast path: only iCloud (ubiquitous) items can need materializing, and
+    // they only live under ~/Library/Mobile Documents. For everything else,
+    // return immediately — the recursive scan below used to walk every file
+    // inside local folders and made ordinary moves/copies noticeably slow.
+    let isUbiquitous = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
+    if !isUbiquitous,
+       !url.resolvingSymlinksInPath().path.contains("/Mobile Documents/") {
+        return
+    }
+
     var pending: [URL] = []
     func consider(_ u: URL) {
         guard let v = try? u.resourceValues(forKeys: keys), v.isUbiquitousItem == true else { return }
@@ -112,6 +123,7 @@ struct ContentView: View {
                     onDropInto: { dropInto($0, folder: $1, move: $2) },
                     onCopyItems: { copyProviders(from: leftPane, cut: $0) },
                     onPasteItems: { paste($0, into: leftPane) },
+                    onDelete: { requestDelete(side: .left) },
                     onNewFolder: { presentNewItem(in: .left, isFile: false) },
                     onNewFile: { presentNewItem(in: .left, isFile: true) }
                 )
@@ -129,6 +141,7 @@ struct ContentView: View {
                     onDropInto: { dropInto($0, folder: $1, move: $2) },
                     onCopyItems: { copyProviders(from: rightPane, cut: $0) },
                     onPasteItems: { paste($0, into: rightPane) },
+                    onDelete: { requestDelete(side: .right) },
                     onNewFolder: { presentNewItem(in: .right, isFile: false) },
                     onNewFile: { presentNewItem(in: .right, isFile: true) }
                 )
@@ -583,6 +596,14 @@ struct ContentView: View {
         return true
     }
 
+    // Context-menu delete: make the pane active first so the confirmation
+    // alert counts and deletes the right pane's selection.
+    private func requestDelete(side: Side) {
+        activeSide = side
+        guard !active.selection.isEmpty else { return }
+        confirmDelete = true
+    }
+
     private func deleteSelection() {
         let fm = FileManager.default
         var trashed: [(original: URL, trash: URL)] = []
@@ -680,6 +701,7 @@ struct PaneView: View {
     let onDropInto: ([URL], URL, Bool) -> Bool
     let onCopyItems: (Bool) -> [NSItemProvider]
     let onPasteItems: ([NSItemProvider]) -> Void
+    let onDelete: () -> Void
     let onNewFolder: () -> Void
     let onNewFile: () -> Void
 
@@ -698,6 +720,7 @@ struct PaneView: View {
                 onPaste: { pasteFromPasteboard() },
                 onRename: onRename,
                 onCommitRename: onCommitRename,
+                onDelete: onDelete,
                 onDrop: onDropFiles,
                 onDropInto: onDropInto,
                 onNewFolder: onNewFolder,
@@ -806,12 +829,19 @@ struct PaneView: View {
 
     private var tabBar: some View {
         HStack(spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(Array(tabs.tabs.enumerated()), id: \.element.id) { index, tab in
-                        tabChip(tab: tab, index: index)
+            // Slide horizontally through all tabs; the selected tab is always
+            // scrolled into view when tabs are switched, opened, or closed.
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(tabs.tabs.enumerated()), id: \.element.id) { index, tab in
+                            tabChip(tab: tab, index: index)
+                                .id(tab.id)
+                        }
                     }
                 }
+                .onChange(of: tabs.selectedIndex) { _ in scrollToSelected(proxy) }
+                .onChange(of: tabs.tabs.count) { _ in scrollToSelected(proxy) }
             }
             Button {
                 onActivate()
@@ -853,15 +883,25 @@ struct PaneView: View {
         .background(isActive ? Color.accentColor.opacity(0.05) : Color.clear)
     }
 
+    private func scrollToSelected(_ proxy: ScrollViewProxy) {
+        guard tabs.tabs.indices.contains(tabs.selectedIndex) else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            proxy.scrollTo(tabs.tabs[tabs.selectedIndex].id, anchor: nil)
+        }
+    }
+
     private func tabChip(tab: PaneModel, index: Int) -> some View {
         let isSelected = index == tabs.selectedIndex
         return HStack(spacing: 6) {
             Image(systemName: "folder")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            // Long names truncate so many tabs stay visible; full path in tooltip
             Text(tab.directory.lastPathComponent.isEmpty ? "/" : tab.directory.lastPathComponent)
                 .font(.body)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
             if tabs.tabs.count > 1 {
                 Button {
                     tabs.closeTab(index)
@@ -869,12 +909,16 @@ struct PaneView: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help("Close Tab")
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 10)
         .padding(.vertical, 6)
+        .frame(minWidth: 90, maxWidth: 160)
         .background(
             RoundedRectangle(cornerRadius: 7)
                 .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08))

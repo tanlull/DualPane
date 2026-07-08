@@ -162,9 +162,23 @@ final class PaneModel: ObservableObject, Identifiable {
         if !showHidden { options.insert(.skipsHiddenFiles) }
 
         do {
-            let urls = try fm.contentsOfDirectory(
+            var urls = try fm.contentsOfDirectory(
                 at: directory, includingPropertiesForKeys: Array(Self.itemKeys), options: options)
-            items = urls.map(makeItem(url:))
+            // The iCloud Drive root holds Desktop/Documents as symlinks that
+            // macOS flags hidden; Finder shows them anyway — match that.
+            if !showHidden, directory.lastPathComponent == "com~apple~CloudDocs" {
+                for name in ["Desktop", "Documents"] {
+                    let link = directory.appendingPathComponent(name)
+                    if !urls.contains(where: { $0.lastPathComponent == name }),
+                        fm.fileExists(atPath: link.path) {
+                        urls.append(link)
+                    }
+                }
+            }
+            items = urls.map { makeItem(url: $0) }
+            if directory.lastPathComponent == "com~apple~CloudDocs" {
+                items += appLibraryItems()
+            }
             loadError = nil
         } catch {
             // Surface the failure instead of silently showing an empty pane —
@@ -179,12 +193,48 @@ final class PaneModel: ObservableObject, Identifiable {
 
     private static let itemKeys: Set<URLResourceKey> = [
         .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey,
-        .labelNumberKey, .tagNamesKey,
+        .labelNumberKey, .tagNamesKey, .isSymbolicLinkKey,
     ]
 
-    private func makeItem(url: URL) -> FileItem {
+    // Finder's "iCloud Drive" is a merged view: app folders (Obsidian, Pages,
+    // Numbers, …) are not inside com~apple~CloudDocs but are sibling
+    // containers under ~/Library/Mobile Documents, each presented by the
+    // localized name of its Documents folder. macOS marks the containers of
+    // apps that opted out of showing in iCloud Drive as hidden, so listing
+    // the visible ones reproduces Finder's set exactly.
+    private func appLibraryItems() -> [FileItem] {
+        let fm = FileManager.default
+        let base = directory.deletingLastPathComponent()
+        guard base.lastPathComponent == "Mobile Documents",
+            let containers = try? fm.contentsOfDirectory(
+                at: base, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else { return [] }
+
+        var result: [FileItem] = []
+        for container in containers where container.lastPathComponent != "com~apple~CloudDocs" {
+            let docs = container.appendingPathComponent("Documents")
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: docs.path, isDirectory: &isDir), isDir.boolValue
+            else { continue }
+            let name = (try? docs.resourceValues(forKeys: [.localizedNameKey]))?.localizedName
+                ?? container.lastPathComponent
+            result.append(makeItem(url: docs, displayName: name))
+        }
+        return result
+    }
+
+    private func makeItem(url: URL, displayName: String? = nil) -> FileItem {
         let values = try? url.resourceValues(forKeys: Self.itemKeys)
-        let isDirectory = values?.isDirectory ?? false
+        var isDirectory = values?.isDirectory ?? false
+        // A symlink reports isDirectory=false for the link itself; when it
+        // resolves to a folder (e.g. iCloud Drive's Desktop/Documents),
+        // treat it as one so it can be navigated into.
+        if !isDirectory, values?.isSymbolicLink == true {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
+                isDirectory = isDir.boolValue
+            }
+        }
         // Colors come from the tag names (the source of truth Finder and
         // Spotlight use); legacy label number is only a fallback.
         let names = values?.tagNames ?? []
@@ -196,7 +246,7 @@ final class PaneModel: ObservableObject, Identifiable {
         }
         return FileItem(
             url: url,
-            name: url.lastPathComponent,
+            name: displayName ?? url.lastPathComponent,
             isDirectory: isDirectory,
             size: Int64(values?.fileSize ?? 0),
             modified: values?.contentModificationDate ?? .distantPast,
@@ -243,7 +293,7 @@ final class PaneModel: ObservableObject, Identifiable {
             let urls = paths.map { URL(fileURLWithPath: $0) }
             await MainActor.run { [weak self] in
                 guard let self, token == self.searchToken, self.tagFilter == label else { return }
-                self.items = urls.map(self.makeItem(url:))
+                self.items = urls.map { self.makeItem(url: $0) }
                 self.applySort()
                 self.selection = self.selection.filter { sel in self.items.contains { $0.url == sel } }
             }

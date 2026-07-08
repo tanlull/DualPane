@@ -43,10 +43,14 @@ EOF
     openssl req -x509 -newkey rsa:2048 -nodes \
         -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
         -days 3650 -config "$TMP/cert.conf" >/dev/null 2>&1
-    openssl pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
-        -out "$TMP/cert.p12" -passout pass: -name "$IDENTITY" >/dev/null 2>&1
+    # -legacy + a non-empty password: OpenSSL 3.x's default PKCS12 MAC/cipher
+    # isn't readable by macOS's Keychain importer, and an empty password
+    # still fails MAC verification even with -legacy. The password is only
+    # used for this one-shot import and is discarded with $TMP.
+    openssl pkcs12 -export -legacy -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
+        -out "$TMP/cert.p12" -passout pass:dualpane -name "$IDENTITY" >/dev/null 2>&1
     security import "$TMP/cert.p12" -k "$HOME/Library/Keychains/login.keychain-db" \
-        -P "" -T /usr/bin/codesign >/dev/null 2>&1
+        -P "dualpane" -T /usr/bin/codesign >/dev/null 2>&1
     rm -rf "$TMP"
 fi
 

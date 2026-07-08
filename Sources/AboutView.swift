@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.8"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.1"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,17 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "2.1", date: "8 Jul 2026", changes: [
+            "Move to Trash added to the right-click menu",
+            "File moves and copies are much faster: the iCloud download check no longer scans every file inside local folders, and dragging over the list no longer re-reads the dragged items on every mouse move",
+            "Better tab bar: tabs have a tidy uniform width with long names truncated, the bar slides horizontally when there are many tabs, and the selected tab always scrolls into view — click a tab to switch, click ✕ to close",
+        ]),
+        Release(version: "2.0", date: "2 Jul 2026", changes: [
+            "iCloud Drive now shows app folders (Obsidian, Numbers, Keynote, Pages, …) like Finder does — they are separate app containers that live outside the iCloud Drive folder, and are now merged into the view with their proper names",
+        ]),
+        Release(version: "1.9", date: "2 Jul 2026", changes: [
+            "iCloud Drive now shows the Desktop and Documents folders (macOS stores them as hidden symlinks; they are shown like Finder does and open as folders)",
+        ]),
         Release(version: "1.8", date: "2 Jul 2026", changes: [
             "Undo (⌘Z, also in the toolbar and Edit menu) for file operations: move, copy, rename, delete, and new file/folder — deletes are restored from the Trash, and undo never overwrites existing items",
             "New Folder and New File added to the right-click menu",

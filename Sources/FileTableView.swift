@@ -13,6 +13,7 @@ struct FileTableView: NSViewRepresentable {
     let onPaste: () -> Void
     let onRename: () -> Void
     let onCommitRename: (URL, String) -> Void
+    let onDelete: () -> Void
     let onDrop: ([URL]) -> Bool
     let onDropInto: ([URL], URL, Bool) -> Bool // urls, destination folder, move
     let onNewFolder: () -> Void
@@ -299,6 +300,22 @@ struct FileTableView: NSViewRepresentable {
 
         // MARK: Drop target
 
+        // validateDrop fires on every mouse move during a drag; re-reading the
+        // pasteboard each time is slow with many items and made drags lag.
+        // Cache the URLs once per drag session (keyed by its sequence number).
+        private var dragCacheSequence = -1
+        private var dragCacheURLs: [URL] = []
+
+        private func draggedURLs(_ info: NSDraggingInfo) -> [URL] {
+            let sequence = info.draggingSequenceNumber
+            if sequence != dragCacheSequence {
+                dragCacheSequence = sequence
+                dragCacheURLs = (info.draggingPasteboard.readObjects(
+                    forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+            }
+            return dragCacheURLs
+        }
+
         // A folder row can accept `urls` only if none of them *is* that folder,
         // contains it, or already lives directly inside it. Path-prefix checks
         // are a conservative pre-filter; the transfer itself re-validates with
@@ -323,9 +340,8 @@ struct FileTableView: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo,
                        proposedRow row: Int, proposedDropOperation: NSTableView.DropOperation) -> NSDragOperation {
-            guard let urls = info.draggingPasteboard.readObjects(
-                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
-                !urls.isEmpty else { return [] }
+            let urls = draggedURLs(info)
+            guard !urls.isEmpty else { return [] }
             let sameTable = (info.draggingSource as? NSTableView) === tableView
 
             // Hovering over a folder row: drop *into* that folder — a move when
@@ -347,8 +363,8 @@ struct FileTableView: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo,
                        row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
-            guard let urls = info.draggingPasteboard.readObjects(
-                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return false }
+            let urls = draggedURLs(info)
+            guard !urls.isEmpty else { return false }
             let sameTable = (info.draggingSource as? NSTableView) === tableView
             if dropOperation == .on, let target = folderTarget(for: urls, row: row) {
                 return parent.onDropInto(urls, target.url, sameTable)
@@ -368,6 +384,7 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Open in Terminal", #selector(menuTerminal)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("Rename…", #selector(menuRename)))
+            menu.addItem(makeMenuItem("Move to Trash", #selector(menuDelete)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("New Folder", #selector(menuNewFolder)))
             menu.addItem(makeMenuItem("New File", #selector(menuNewFile)))
@@ -396,7 +413,8 @@ struct FileTableView: NSViewRepresentable {
             let canPaste = NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: nil)
             for item in menu.items {
                 switch item.action {
-                case #selector(menuOpen), #selector(menuReveal), #selector(menuCopy), #selector(menuCut):
+                case #selector(menuOpen), #selector(menuReveal), #selector(menuCopy),
+                     #selector(menuCut), #selector(menuDelete):
                     item.isEnabled = hasSelection
                 case #selector(menuRename):
                     item.isEnabled = table.selectedRowIndexes.count == 1
@@ -432,6 +450,10 @@ struct FileTableView: NSViewRepresentable {
         }
 
         @objc func menuRename(_ sender: Any?) { parent.onRename() }
+
+        @objc func menuDelete(_ sender: Any?) {
+            MainActor.assumeIsolated { parent.onActivate(); parent.onDelete() }
+        }
 
         @objc func menuNewFolder(_ sender: Any?) {
             MainActor.assumeIsolated { parent.onActivate(); parent.onNewFolder() }
