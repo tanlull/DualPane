@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.1"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.4"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,17 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "2.4", date: "14 Jul 2026", changes: [
+            "Adjustable pane split: drag the strip between the panes to resize them (double-click it to reset to 50/50) — the split is remembered across launches",
+            "Column widths can be resized by dragging the dividers between column headers, remembered separately for each pane",
+            "Right-click (or Control-click) a column header to show or hide the Size and Modified columns per pane",
+        ]),
+        Release(version: "2.3", date: "8 Jul 2026", changes: [
+            "Right-click menu and delete confirmation now say \"Delete\" instead of \"Move to Trash\" — the action still moves items to the Trash, just a shorter label",
+        ]),
+        Release(version: "2.2", date: "8 Jul 2026", changes: [
+            "Tab bar now shows left/right arrow buttons when there are too many tabs to fit, so you can step through them without a trackpad's horizontal swipe",
+        ]),
         Release(version: "2.1", date: "8 Jul 2026", changes: [
             "Move to Trash added to the right-click menu",
             "File moves and copies are much faster: the iCloud download check no longer scans every file inside local folders, and dragging over the list no longer re-reads the dragged items on every mouse move",

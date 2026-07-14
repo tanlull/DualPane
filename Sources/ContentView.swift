@@ -84,6 +84,9 @@ struct ContentView: View {
     @State private var confirmDelete = false
     @State private var cutURLs = Set<URL>()
     @AppStorage("showTagColors") private var showTagColors = true
+    // Left pane's share of the width (0…1), draggable via the transfer strip.
+    @AppStorage("paneSplitFraction") private var paneSplitFraction = 0.5
+    @State private var splitDragBase: CGFloat? // left width when a drag began
     @State private var transferring: Side?
     @State private var pendingConflict: TransferRequest?
     @Environment(\.openWindow) private var openWindow
@@ -109,11 +112,15 @@ struct ContentView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            HStack(spacing: 0) {
+            GeometryReader { geo in
+                let available = max(geo.size.width - Self.transferStripWidth, 0)
+                let leftWidth = leftPaneWidth(available: available)
+                HStack(spacing: 0) {
                 PaneView(
                     model: leftPane,
                     tabs: leftTabs,
                     favorites: favorites,
+                    paneID: "leftPane",
                     isActive: activeSide == .left,
                     showTagColors: showTagColors,
                     onActivate: { activeSide = .left },
@@ -127,11 +134,13 @@ struct ContentView: View {
                     onNewFolder: { presentNewItem(in: .left, isFile: false) },
                     onNewFile: { presentNewItem(in: .left, isFile: true) }
                 )
-                transferStrip
+                .frame(width: leftWidth)
+                transferStrip(available: available, leftWidth: leftWidth)
                 PaneView(
                     model: rightPane,
                     tabs: rightTabs,
                     favorites: favorites,
+                    paneID: "rightPane",
                     isActive: activeSide == .right,
                     showTagColors: showTagColors,
                     onActivate: { activeSide = .right },
@@ -145,6 +154,8 @@ struct ContentView: View {
                     onNewFolder: { presentNewItem(in: .right, isFile: false) },
                     onNewFile: { presentNewItem(in: .right, isFile: true) }
                 )
+                .frame(maxWidth: .infinity)
+                }
             }
             Divider()
             statusBar
@@ -171,7 +182,7 @@ struct ContentView: View {
             Text("One or more items with the same name already exist in the destination folder.\n\n“Replace” moves the existing items to the Trash. “Keep Both” gives the new copies a numbered name.")
         }
         .alert("Delete \(active.selection.count) item(s)?", isPresented: $confirmDelete) {
-            Button("Move to Trash", role: .destructive) { deleteSelection() }
+            Button("Delete", role: .destructive) { deleteSelection() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Items will be moved to the Trash.")
@@ -286,7 +297,20 @@ struct ContentView: View {
         .help(help)
     }
 
-    private var transferStrip: some View {
+    static let transferStripWidth: CGFloat = 34
+    private static let minPaneWidth: CGFloat = 380
+
+    // Left pane width for the current split fraction, keeping both panes at
+    // their minimum width whenever the window is wide enough to allow it.
+    private func leftPaneWidth(available: CGFloat) -> CGFloat {
+        guard available > Self.minPaneWidth * 2 else { return available / 2 }
+        let raw = available * CGFloat(paneSplitFraction)
+        return min(max(raw, Self.minPaneWidth), available - Self.minPaneWidth)
+    }
+
+    // The strip between the panes doubles as a splitter: drag it to resize
+    // the panes, double-click to reset to 50/50.
+    private func transferStrip(available: CGFloat, leftWidth: CGFloat) -> some View {
         VStack(spacing: 14) {
             Spacer()
             transferButton(side: .left, icon: "arrow.right.circle.fill",
@@ -298,8 +322,26 @@ struct ContentView: View {
             Spacer()
         }
         .buttonStyle(.borderless)
-        .frame(width: 34)
+        .frame(width: Self.transferStripWidth)
+        .frame(maxHeight: .infinity)
         .background(.bar)
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    let base = splitDragBase ?? leftWidth
+                    if splitDragBase == nil { splitDragBase = leftWidth }
+                    guard available > 0 else { return }
+                    let proposed = base + value.translation.width
+                    paneSplitFraction = Double(min(max(proposed / available, 0.1), 0.9))
+                }
+                .onEnded { _ in splitDragBase = nil }
+        )
+        .onTapGesture(count: 2) { paneSplitFraction = 0.5 }
+        .onHover { inside in
+            if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+        }
+        .help("Drag to resize the panes; double-click to reset to 50/50")
     }
 
     @ViewBuilder
@@ -688,10 +730,22 @@ struct ContentView: View {
 
 // MARK: - Pane
 
+private struct TabsContentWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct TabsContainerWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct PaneView: View {
     @ObservedObject var model: PaneModel
     @ObservedObject var tabs: PaneTabsModel
     @ObservedObject var favorites: FavoritesStore
+    /// Stable identifier ("leftPane"/"rightPane") for remembering column layout.
+    let paneID: String
     let isActive: Bool
     let showTagColors: Bool
     let onActivate: () -> Void
@@ -705,6 +759,11 @@ struct PaneView: View {
     let onNewFolder: () -> Void
     let onNewFile: () -> Void
 
+    @State private var tabScrollCursor = 0
+    @State private var tabsContentWidth: CGFloat = 0
+    @State private var tabsContainerWidth: CGFloat = 0
+    private var tabsOverflow: Bool { tabsContentWidth > tabsContainerWidth + 1 }
+
     var body: some View {
         VStack(spacing: 0) {
             tabBar
@@ -714,6 +773,7 @@ struct PaneView: View {
             FileTableView(
                 model: model,
                 showTagColors: showTagColors,
+                autosaveName: paneID,
                 onActivate: onActivate,
                 onCopy: { writeToPasteboard(cut: false) },
                 onCut: { writeToPasteboard(cut: true) },
@@ -831,16 +891,49 @@ struct PaneView: View {
         HStack(spacing: 6) {
             // Slide horizontally through all tabs; the selected tab is always
             // scrolled into view when tabs are switched, opened, or closed.
+            // When the strip overflows its width, chevrons appear so tabs can
+            // be stepped through without a trackpad's horizontal swipe.
             ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(Array(tabs.tabs.enumerated()), id: \.element.id) { index, tab in
-                            tabChip(tab: tab, index: index)
-                                .id(tab.id)
+                HStack(spacing: 2) {
+                    if tabsOverflow {
+                        Button {
+                            stepTabScroll(-1, proxy)
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 10, weight: .semibold))
                         }
+                        .help("Scroll tabs left")
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(Array(tabs.tabs.enumerated()), id: \.element.id) { index, tab in
+                                tabChip(tab: tab, index: index)
+                                    .id(tab.id)
+                            }
+                        }
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(key: TabsContentWidthKey.self, value: geo.size.width)
+                        })
+                    }
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: TabsContainerWidthKey.self, value: geo.size.width)
+                    })
+                    .onPreferenceChange(TabsContentWidthKey.self) { tabsContentWidth = $0 }
+                    .onPreferenceChange(TabsContainerWidthKey.self) { tabsContainerWidth = $0 }
+                    if tabsOverflow {
+                        Button {
+                            stepTabScroll(1, proxy)
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .help("Scroll tabs right")
                     }
                 }
-                .onChange(of: tabs.selectedIndex) { _ in scrollToSelected(proxy) }
+                .onChange(of: tabs.selectedIndex) { _ in
+                    tabScrollCursor = tabs.selectedIndex
+                    scrollToSelected(proxy)
+                }
                 .onChange(of: tabs.tabs.count) { _ in scrollToSelected(proxy) }
             }
             Button {
@@ -881,6 +974,14 @@ struct PaneView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
         .background(isActive ? Color.accentColor.opacity(0.05) : Color.clear)
+    }
+
+    private func stepTabScroll(_ delta: Int, _ proxy: ScrollViewProxy) {
+        guard !tabs.tabs.isEmpty else { return }
+        tabScrollCursor = max(0, min(tabs.tabs.count - 1, tabScrollCursor + delta))
+        withAnimation(.easeOut(duration: 0.2)) {
+            proxy.scrollTo(tabs.tabs[tabScrollCursor].id, anchor: delta < 0 ? .leading : .trailing)
+        }
     }
 
     private func scrollToSelected(_ proxy: ScrollViewProxy) {

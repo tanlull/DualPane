@@ -7,6 +7,9 @@ import UniformTypeIdentifiers
 struct FileTableView: NSViewRepresentable {
     @ObservedObject var model: PaneModel
     let showTagColors: Bool
+    /// Stable per-pane key (e.g. "leftPane" / "rightPane") used to remember
+    /// column widths and which columns are hidden across launches.
+    let autosaveName: String
     let onActivate: () -> Void
     let onCopy: () -> Void
     let onCut: () -> Void
@@ -41,21 +44,33 @@ struct FileTableView: NSViewRepresentable {
         let sizeCol = NSTableColumn(identifier: .init("size"))
         sizeCol.title = "Size"
         sizeCol.width = 80
-        sizeCol.minWidth = 60
-        sizeCol.maxWidth = 120
+        sizeCol.minWidth = 50
+        sizeCol.maxWidth = 240
         sizeCol.sortDescriptorPrototype = NSSortDescriptor(key: "size", ascending: true)
 
         let dateCol = NSTableColumn(identifier: .init("modified"))
         dateCol.title = "Modified"
         dateCol.width = 150
-        dateCol.minWidth = 110
-        dateCol.maxWidth = 190
+        dateCol.minWidth = 90
+        dateCol.maxWidth = 320
         dateCol.sortDescriptorPrototype = NSSortDescriptor(key: "modified", ascending: true)
 
         table.addTableColumn(nameCol)
         table.addTableColumn(sizeCol)
         table.addTableColumn(dateCol)
         table.sortDescriptors = [nameCol.sortDescriptorPrototype!]
+
+        // Remember column widths per pane across launches. Setting autosaveName
+        // after the columns exist makes the table restore any saved widths now.
+        table.autosaveName = autosaveName
+        table.autosaveTableColumns = true
+
+        // Right-click (or Control-click) on the column header: show/hide columns.
+        // Hidden state is persisted separately — autosave only covers order/width.
+        table.headerView?.menu = context.coordinator.buildHeaderMenu()
+        for id in Coordinator.hiddenColumns(autosaveName: autosaveName) {
+            table.tableColumn(withIdentifier: .init(id))?.isHidden = true
+        }
 
         table.target = context.coordinator
         table.doubleAction = #selector(Coordinator.doubleClicked(_:))
@@ -373,6 +388,50 @@ struct FileTableView: NSViewRepresentable {
             return parent.onDrop(urls)
         }
 
+        // MARK: Header menu (show/hide columns)
+
+        private weak var headerMenu: NSMenu?
+        // Name is the anchor column and can't be hidden — only these can.
+        private static let toggleableColumns: [(id: String, title: String)] = [
+            ("size", "Size"),
+            ("modified", "Modified"),
+        ]
+
+        private static func hiddenColumnsKey(_ autosaveName: String) -> String {
+            "hiddenColumns.\(autosaveName)"
+        }
+
+        static func hiddenColumns(autosaveName: String) -> [String] {
+            UserDefaults.standard.stringArray(forKey: hiddenColumnsKey(autosaveName)) ?? []
+        }
+
+        func buildHeaderMenu() -> NSMenu {
+            let menu = NSMenu()
+            menu.delegate = self
+            menu.autoenablesItems = false
+            for column in Self.toggleableColumns {
+                let item = NSMenuItem(title: column.title,
+                                      action: #selector(toggleColumnVisibility(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = column.id
+                menu.addItem(item)
+            }
+            headerMenu = menu
+            return menu
+        }
+
+        @objc private func toggleColumnVisibility(_ sender: NSMenuItem) {
+            guard let table = tableView,
+                  let id = sender.representedObject as? String,
+                  let column = table.tableColumn(withIdentifier: .init(id)) else { return }
+            column.isHidden.toggle()
+            var hidden = Set(Self.hiddenColumns(autosaveName: parent.autosaveName))
+            if column.isHidden { hidden.insert(id) } else { hidden.remove(id) }
+            UserDefaults.standard.set(Array(hidden).sorted(),
+                                      forKey: Self.hiddenColumnsKey(parent.autosaveName))
+        }
+
         // MARK: Context menu
 
         func buildMenu() -> NSMenu {
@@ -384,7 +443,7 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Open in Terminal", #selector(menuTerminal)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("Rename…", #selector(menuRename)))
-            menu.addItem(makeMenuItem("Move to Trash", #selector(menuDelete)))
+            menu.addItem(makeMenuItem("Delete", #selector(menuDelete)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("New Folder", #selector(menuNewFolder)))
             menu.addItem(makeMenuItem("New File", #selector(menuNewFile)))
@@ -405,6 +464,14 @@ struct FileTableView: NSViewRepresentable {
 
         func menuNeedsUpdate(_ menu: NSMenu) {
             guard let table = tableView else { return }
+            if menu === headerMenu {
+                for item in menu.items {
+                    guard let id = item.representedObject as? String,
+                          let column = table.tableColumn(withIdentifier: .init(id)) else { continue }
+                    item.state = column.isHidden ? .off : .on
+                }
+                return
+            }
             let clicked = table.clickedRow
             if clicked >= 0, !table.selectedRowIndexes.contains(clicked) {
                 table.selectRowIndexes([clicked], byExtendingSelection: false)

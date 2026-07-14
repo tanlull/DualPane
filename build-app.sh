@@ -57,7 +57,13 @@ fi
 xattr -cr "$APP" 2>/dev/null || true
 codesign --force --deep --sign "$IDENTITY" "$APP"
 
-echo "==> Done: $(pwd)/$APP  (signed with '$IDENTITY')"
+echo "==> Installing to /Applications..."
+pkill -x DualPane 2>/dev/null || true
+rm -rf "/Applications/$APP"
+mv "$APP" /Applications/
+APP="/Applications/DualPane.app"
+
+echo "==> Done: $APP  (signed with '$IDENTITY')"
 echo
 echo "First build only: grant DualPane.app Full Disk Access once"
 echo "(System Settings > Privacy & Security > Full Disk Access). Because the"
