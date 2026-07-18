@@ -269,7 +269,14 @@ struct FileTableView: NSViewRepresentable {
 
         // MARK: Inline rename
 
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            // Hold off auto-refresh: reloading the table would close the field
+            // editor and lose what the user has typed.
+            MainActor.assumeIsolated { parent.model.isRenaming = true }
+        }
+
         func controlTextDidEndEditing(_ obj: Notification) {
+            MainActor.assumeIsolated { parent.model.isRenaming = false }
             guard let field = obj.object as? NSTextField, let table = tableView else { return }
             let row = table.row(for: field)
             guard row >= 0, row < items.count else { return }

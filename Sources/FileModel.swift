@@ -96,7 +96,10 @@ struct FileItem: Identifiable, Hashable {
 final class PaneModel: ObservableObject, Identifiable {
     let id = UUID()
     @Published var directory: URL {
-        didSet { persistDirectory() }
+        didSet {
+            persistDirectory()
+            watcher.start(directory)
+        }
     }
     @Published var items: [FileItem] = []
     @Published var selection = Set<URL>()
@@ -130,10 +133,32 @@ final class PaneModel: ObservableObject, Identifiable {
     private var history: [URL] = []
     private let persistKey: String?
 
+    // True while a row is being renamed in-cell. Refreshing the table under an
+    // open field editor would drop what the user has typed, so auto-refresh
+    // holds off until the rename is committed or cancelled.
+    var isRenaming = false
+
+    /// Watches the current directory so the pane refreshes itself when files
+    /// change on disk — from Finder, the Terminal, the other pane, or sync.
+    private lazy var watcher = DirectoryWatcher { [weak self] in
+        self?.autoRefresh()
+    }
+
     init(directory: URL, persistKey: String? = nil) {
         self.persistKey = persistKey
         self.directory = directory
         self.pathText = directory.path
+        reload()
+        watcher.start(directory)
+    }
+
+    /// Called from the directory watcher. Skips the reload in the cases where it
+    /// would fight the user instead of helping.
+    private func autoRefresh() {
+        guard !isRenaming else { return }
+        // Tag filtering shows Spotlight results, not this directory's contents,
+        // so a directory event says nothing useful about them.
+        guard tagFilter == nil else { return }
         reload()
     }
 
@@ -157,6 +182,9 @@ final class PaneModel: ObservableObject, Identifiable {
             runTagSearch(filter)
             return
         }
+        // Kept so an auto-refresh that finds nothing new can leave the table
+        // alone — reloading it would cost a redraw and interrupt the user.
+        let previousItems = items
         let fm = FileManager.default
         var options: FileManager.DirectoryEnumerationOptions = []
         if !showHidden { options.insert(.skipsHiddenFiles) }
@@ -186,7 +214,7 @@ final class PaneModel: ObservableObject, Identifiable {
             items = []
             loadError = error.localizedDescription
         }
-        applySort()
+        applySort(previous: previousItems)
         pathText = directory.path
         selection = selection.filter { sel in items.contains { $0.url == sel } }
     }
@@ -300,14 +328,20 @@ final class PaneModel: ObservableObject, Identifiable {
         }
     }
 
-    private func applySort() {
+    private func applySort(previous: [FileItem]? = nil) {
+        let sorted: [FileItem]
         if foldersFirst {
             let dirs = items.filter(\.isDirectory).sorted(using: sortOrder)
             let files = items.filter { !$0.isDirectory }.sorted(using: sortOrder)
-            items = dirs + files
+            sorted = dirs + files
         } else {
-            items = items.sorted(using: sortOrder)
+            sorted = items.sorted(using: sortOrder)
         }
+        items = sorted
+        // The table view reloads on a revision bump, so only bump when the list
+        // really differs — otherwise a watcher event on an unrelated file would
+        // redraw the pane for nothing.
+        if let previous, previous == sorted { return }
         revision += 1
     }
 

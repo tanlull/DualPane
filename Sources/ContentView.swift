@@ -86,6 +86,7 @@ struct ContentView: View {
     @AppStorage("showTagColors") private var showTagColors = true
     // Left pane's share of the width (0…1), draggable via the transfer strip.
     @AppStorage("paneSplitFraction") private var paneSplitFraction = 0.5
+    @State private var liveSplitFraction: Double? // transient value while dragging, to avoid AppStorage churn per-pixel
     @State private var splitDragBase: CGFloat? // left width when a drag began
     @State private var transferring: Side?
     @State private var pendingConflict: TransferRequest?
@@ -199,6 +200,14 @@ struct ContentView: View {
             }
             UndoStore.shared.onError = { errorMessage = $0 }
         }
+        // Belt and braces for the directory watchers: network shares and cloud
+        // folders don't always deliver kernel events, so re-read both panes
+        // whenever the user comes back to the app.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in
+            leftPane.reload()
+            rightPane.reload()
+        }
         .background {
             Button("") { tabs(for: activeSide).addTab() }
                 .keyboardShortcut("t", modifiers: .command)
@@ -304,7 +313,7 @@ struct ContentView: View {
     // their minimum width whenever the window is wide enough to allow it.
     private func leftPaneWidth(available: CGFloat) -> CGFloat {
         guard available > Self.minPaneWidth * 2 else { return available / 2 }
-        let raw = available * CGFloat(paneSplitFraction)
+        let raw = available * CGFloat(liveSplitFraction ?? paneSplitFraction)
         return min(max(raw, Self.minPaneWidth), available - Self.minPaneWidth)
     }
 
@@ -333,9 +342,13 @@ struct ContentView: View {
                     if splitDragBase == nil { splitDragBase = leftWidth }
                     guard available > 0 else { return }
                     let proposed = base + value.translation.width
-                    paneSplitFraction = Double(min(max(proposed / available, 0.1), 0.9))
+                    liveSplitFraction = Double(min(max(proposed / available, 0.1), 0.9))
                 }
-                .onEnded { _ in splitDragBase = nil }
+                .onEnded { _ in
+                    if let liveSplitFraction { paneSplitFraction = liveSplitFraction }
+                    liveSplitFraction = nil
+                    splitDragBase = nil
+                }
         )
         .onTapGesture(count: 2) { paneSplitFraction = 0.5 }
         .onHover { inside in
@@ -700,6 +713,7 @@ struct ContentView: View {
         let trimmed = newItemName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         let dest = active.directory.appendingPathComponent(trimmed)
+        var created = false
         do {
             if newItemIsFile {
                 guard !FileManager.default.fileExists(atPath: dest.path) else {
@@ -711,14 +725,25 @@ struct ContentView: View {
                     return
                 }
                 UndoStore.shared.record(.create(dest))
+                created = true
             } else {
                 try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: false)
                 UndoStore.shared.record(.create(dest))
+                created = true
             }
         } catch {
             errorMessage = error.localizedDescription
         }
         active.reload()
+        guard created else { return }
+        // New items can sort anywhere in a long list; scroll to the new item
+        // and offer to rename it immediately, like Finder does. Look up the
+        // freshly-reloaded item's own URL rather than reusing `dest` — a
+        // constructed URL can fail `==` against the one FileManager's
+        // directory enumeration hands back for the same path.
+        guard let createdItem = active.items.first(where: { $0.url.path == dest.path }) else { return }
+        active.selection = [createdItem.url]
+        active.renameRequest = createdItem.url
     }
 
     private func swapPanes() {

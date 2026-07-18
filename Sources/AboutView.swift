@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.4"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.7"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,17 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "2.7", date: "18 Jul 2026", changes: [
+            "Each pane now refreshes itself when files change on disk — save a file in another app, unzip something in Terminal, or copy into a folder from the other pane, and the list updates on its own instead of waiting for a manual refresh",
+            "Both panes also re-read their folders when you switch back to DualPane, which covers network shares and cloud folders that don't always announce changes",
+            "Auto-refresh stays out of the way: it holds off while you are renaming a file in place, and leaves the list untouched when nothing has actually changed, so your scroll position and selection survive",
+        ]),
+        Release(version: "2.6", date: "14 Jul 2026", changes: [
+            "New File/New Folder now scrolls the new item into view and offers to rename it right away — previously it was created correctly but could land far down an alphabetically-sorted list, off-screen, making it look like nothing happened",
+        ]),
+        Release(version: "2.5", date: "14 Jul 2026", changes: [
+            "Fixed janky, stuttery pane resizing — dragging the splitter no longer writes to disk on every pixel of movement, so it now tracks the mouse smoothly",
+        ]),
         Release(version: "2.4", date: "14 Jul 2026", changes: [
             "Adjustable pane split: drag the strip between the panes to resize them (double-click it to reset to 50/50) — the split is remembered across launches",
             "Column widths can be resized by dragging the dividers between column headers, remembered separately for each pane",
