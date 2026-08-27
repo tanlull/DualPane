@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.0"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.1", date: "27 Aug 2026", changes: [
+            "Fixed the real reason ⌘⌫, Rename, Copy and Move often did nothing: the toolbar and menu were not being told when your selection changed, so the commands stayed greyed out even with a file clearly highlighted",
+            "Clicking a file name now always selects the row — the name field no longer swallows the click and starts renaming by accident (renaming still works from the toolbar, the menu and the right-click menu)",
+            "Files changed today show just the time in the Modified column, like Finder; older items keep the full date",
+        ]),
         Release(version: "3.0", date: "27 Aug 2026", changes: [
             "⌘⌫ (Delete) now really works: it moved to the File menu as “Move to Trash”, so the shortcut is caught by the menu bar instead of being swallowed by the file list",
             "Undo (⌘Z) and Redo (⇧⌘Z) now live in the Edit menu together, so both shortcuts work no matter which pane has focus",

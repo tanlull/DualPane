@@ -89,7 +89,19 @@ struct FileItem: Identifiable, Hashable {
         return f
     }()
 
-    var modifiedText: String { Self.dateFormatter.string(from: modified) }
+    /// Today's items show just the time, like Finder does.
+    static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    var modifiedText: String {
+        Calendar.current.isDateInToday(modified)
+            ? Self.timeFormatter.string(from: modified)
+            : Self.dateFormatter.string(from: modified)
+    }
 }
 
 @MainActor
@@ -475,6 +487,14 @@ final class PaneTabsModel: ObservableObject {
     }
 
     private func observe(_ tab: PaneModel) {
+        // Forward each tab's changes to this container. ContentView observes
+        // the tabs model, not the individual PaneModel behind `current`, so
+        // without this its toolbar, File menu and status bar keep whatever
+        // state they last rendered — a freshly selected row never enables
+        // Delete/Rename, and ⌘⌫ looks broken because the command is disabled.
+        tab.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
         tab.$directory
             .dropFirst()
             .sink { [weak self] _ in self?.persist() }

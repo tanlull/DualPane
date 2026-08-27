@@ -150,7 +150,7 @@ struct FileTableView: NSViewRepresentable {
                 model.renameRequest = nil
                 guard row < table.numberOfRows else { return }
                 table.scrollRowToVisible(row)
-                table.editColumn(0, row: row, with: nil, select: true)
+                coordinator.beginEditing(table: table, row: row)
             }
         }
     }
@@ -212,11 +212,15 @@ struct FileTableView: NSViewRepresentable {
             cell.textField = text
 
             if identifier.rawValue == "name" {
-                // Editable so renaming happens in-cell (no dialog). Editing only
-                // begins when we call editColumn(_:row:…); commit/cancel is
-                // handled in controlTextDidEndEditing.
-                text.isEditable = true
-                text.isSelectable = true
+                // NOT editable by default. An always-editable field swallows
+                // clicks meant for the row: the field editor takes first
+                // responder, the table never reports a selection change, and
+                // every selection-driven command (Delete/⌘⌫, Rename, Copy,
+                // Move) stays disabled. Editing is switched on only for the
+                // row we are about to edit, in `beginEditing(row:)`, and
+                // switched back off in controlTextDidEndEditing.
+                text.isEditable = false
+                text.isSelectable = false
                 text.focusRingType = .none
                 text.delegate = self
                 let image = NSImageView()
@@ -280,6 +284,14 @@ struct FileTableView: NSViewRepresentable {
 
         // MARK: Inline rename
 
+        /// Make just this row's name field editable, then start editing it.
+        func beginEditing(table: NSTableView, row: Int) {
+            let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView
+            cell?.textField?.isEditable = true
+            cell?.textField?.isSelectable = true
+            table.editColumn(0, row: row, with: nil, select: true)
+        }
+
         func controlTextDidBeginEditing(_ obj: Notification) {
             // Hold off auto-refresh: reloading the table would close the field
             // editor and lose what the user has typed.
@@ -289,6 +301,9 @@ struct FileTableView: NSViewRepresentable {
         func controlTextDidEndEditing(_ obj: Notification) {
             MainActor.assumeIsolated { parent.model.isRenaming = false }
             guard let field = obj.object as? NSTextField, let table = tableView else { return }
+            // Lock the field again so it stops intercepting row clicks.
+            field.isEditable = false
+            field.isSelectable = false
             let row = table.row(for: field)
             guard row >= 0, row < items.count else { return }
             let item = items[row]
