@@ -193,7 +193,15 @@ struct ContentView: View {
                 performNewItem()
             }
         }
+        .onChange(of: active.selection) { newValue in
+            AppActions.shared.selectionCount = newValue.count
+        }
+        .onChange(of: activeSide) { _ in
+            AppActions.shared.selectionCount = active.selection.count
+        }
         .onAppear {
+            AppActions.shared.deleteRequested = { confirmDelete = true }
+            AppActions.shared.selectionCount = active.selection.count
             UndoStore.shared.onDidUndo = {
                 leftPane.reload()
                 rightPane.reload()
@@ -242,17 +250,14 @@ struct ContentView: View {
             .keyboardShortcut("r")
             .disabled(active.selection.count != 1)
             toolButton("trash", "Delete", help: "Move selection to Trash (⌘⌫)") { confirmDelete = true }
-                .keyboardShortcut(.delete)
                 .disabled(active.selection.isEmpty)
             toolButton("arrow.uturn.backward", "Undo", help: "\(undoStore.undoTitle) (⌘Z)") {
                 undoStore.undo()
             }
-            .keyboardShortcut("z", modifiers: .command)
             .disabled(!undoStore.canUndo)
             toolButton("arrow.uturn.forward", "Redo", help: "\(undoStore.redoTitle) (⇧⌘Z)") {
                 undoStore.redo()
             }
-            .keyboardShortcut("z", modifiers: [.command, .shift])
             .disabled(!undoStore.canRedo)
             Divider().frame(height: 22)
             toolButton("arrow.left.arrow.right", "Swap", help: "Swap pane directories") { swapPanes() }

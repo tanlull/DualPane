@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.9"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.0"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,10 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.0", date: "27 Aug 2026", changes: [
+            "⌘⌫ (Delete) now really works: it moved to the File menu as “Move to Trash”, so the shortcut is caught by the menu bar instead of being swallowed by the file list",
+            "Undo (⌘Z) and Redo (⇧⌘Z) now live in the Edit menu together, so both shortcuts work no matter which pane has focus",
+        ]),
         Release(version: "2.9", date: "27 Aug 2026", changes: [
             "Undo now has its Finder keyboard shortcut: press ⌘Z to take back the last copy, move, rename, delete or new item",
             "Added Redo (⇧⌘Z, and a new toolbar button) to put back whatever you just undid",

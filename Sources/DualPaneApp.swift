@@ -24,6 +24,7 @@ struct DualPaneApp: App {
 struct AppCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject private var undoStore = UndoStore.shared
+    @ObservedObject private var actions = AppActions.shared
 
     var body: some Commands {
         // File-operation undo (⌘Z): replaces the default text-undo menu item so
@@ -34,6 +35,20 @@ struct AppCommands: Commands {
             }
             .keyboardShortcut("z", modifiers: .command)
             .disabled(!undoStore.canUndo)
+            Button(undoStore.redoTitle) {
+                undoStore.redo()
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(!undoStore.canRedo)
+        }
+        // File > Move to Trash (⌘⌫), same shortcut as Finder.
+        CommandGroup(after: .newItem) {
+            Divider()
+            Button("Move to Trash") {
+                actions.deleteRequested?()
+            }
+            .keyboardShortcut(.delete, modifiers: .command)
+            .disabled(!actions.canDelete)
         }
         CommandGroup(replacing: .appInfo) {
             Button("About \(AppInfo.name)") {
