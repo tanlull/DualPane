@@ -110,8 +110,15 @@ final class PaneModel: ObservableObject, Identifiable {
     // Set to a row's URL to begin inline (in-cell) renaming of that item.
     // The table view consumes it and clears it back to nil.
     @Published var renameRequest: URL?
-    @Published var showHidden = false {
-        didSet { reload() }
+    // Set to a row's URL to scroll it into view and select it, without
+    // starting a rename. The table view consumes it and clears it to nil.
+    @Published var revealRequest: URL?
+    // Default off (like Finder); remembered across launches, shared by both panes.
+    @Published var showHidden = UserDefaults.standard.bool(forKey: "showHiddenFiles") {
+        didSet {
+            UserDefaults.standard.set(showHidden, forKey: "showHiddenFiles")
+            reload()
+        }
     }
     // Finder label number to filter by; nil shows everything
     @Published var tagFilter: Int? {

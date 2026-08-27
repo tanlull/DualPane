@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.7"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.9"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,16 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "2.9", date: "27 Aug 2026", changes: [
+            "Undo now has its Finder keyboard shortcut: press ⌘Z to take back the last copy, move, rename, delete or new item",
+            "Added Redo (⇧⌘Z, and a new toolbar button) to put back whatever you just undid",
+            "Delete keeps its Finder shortcut, ⌘⌫, for moving the selection to the Trash",
+            "After naming a new file or folder in the dialog, the name is no longer opened for editing a second time — the item is just created, selected and scrolled into view",
+        ]),
+        Release(version: "2.8", date: "27 Aug 2026", changes: [
+            "The Hidden button in the toolbar now remembers your choice across launches — it still starts off (hidden files stay out of sight) until you turn it on",
+            "The button's icon now shows the current state at a glance: a crossed-out eye when hidden files are hidden, a filled eye when they are shown",
+        ]),
         Release(version: "2.7", date: "18 Jul 2026", changes: [
             "Each pane now refreshes itself when files change on disk — save a file in another app, unzip something in Terminal, or copy into a folder from the other pane, and the list updates on its own instead of waiting for a manual refresh",
             "Both panes also re-read their folders when you switch back to DualPane, which covers network shares and cloud folders that don't always announce changes",

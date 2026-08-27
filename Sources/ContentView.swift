@@ -247,7 +247,13 @@ struct ContentView: View {
             toolButton("arrow.uturn.backward", "Undo", help: "\(undoStore.undoTitle) (⌘Z)") {
                 undoStore.undo()
             }
+            .keyboardShortcut("z", modifiers: .command)
             .disabled(!undoStore.canUndo)
+            toolButton("arrow.uturn.forward", "Redo", help: "\(undoStore.redoTitle) (⇧⌘Z)") {
+                undoStore.redo()
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(!undoStore.canRedo)
             Divider().frame(height: 22)
             toolButton("arrow.left.arrow.right", "Swap", help: "Swap pane directories") { swapPanes() }
             Spacer()
@@ -282,10 +288,13 @@ struct ContentView: View {
                 get: { active.showHidden },
                 set: { leftPane.showHidden = $0; rightPane.showHidden = $0 }
             )) {
-                Label("Hidden", systemImage: "eye")
+                Label("Hidden",
+                      systemImage: active.showHidden ? "eye.fill" : "eye.slash")
             }
             .toggleStyle(.button)
-            .help("Show hidden files")
+            .help(active.showHidden
+                  ? "Hiding hidden files (dotfiles and system items)"
+                  : "Show hidden files (dotfiles and system items)")
             Button {
                 openWindow(id: "about")
             } label: {
@@ -737,13 +746,14 @@ struct ContentView: View {
         active.reload()
         guard created else { return }
         // New items can sort anywhere in a long list; scroll to the new item
-        // and offer to rename it immediately, like Finder does. Look up the
-        // freshly-reloaded item's own URL rather than reusing `dest` — a
-        // constructed URL can fail `==` against the one FileManager's
-        // directory enumeration hands back for the same path.
+        // and select it. The name came from the dialog, so don't re-open
+        // in-cell editing on top of it. Look up the freshly-reloaded item's
+        // own URL rather than reusing `dest` — a constructed URL can fail
+        // `==` against the one FileManager's directory enumeration hands back
+        // for the same path.
         guard let createdItem = active.items.first(where: { $0.url.path == dest.path }) else { return }
         active.selection = [createdItem.url]
-        active.renameRequest = createdItem.url
+        active.revealRequest = createdItem.url
     }
 
     private func swapPanes() {

@@ -132,6 +132,17 @@ struct FileTableView: NSViewRepresentable {
             coordinator.isSyncingSelection = false
         }
 
+        // A reveal was requested (e.g. a just-created item): scroll it into
+        // view but leave its name alone.
+        if let target = model.revealRequest,
+           let row = coordinator.items.firstIndex(where: { $0.url == target }) {
+            DispatchQueue.main.async {
+                model.revealRequest = nil
+                guard row < table.numberOfRows else { return }
+                table.scrollRowToVisible(row)
+            }
+        }
+
         // A rename was requested (toolbar/menu): begin in-cell editing of that row.
         if let target = model.renameRequest,
            let row = coordinator.items.firstIndex(where: { $0.url == target }) {
