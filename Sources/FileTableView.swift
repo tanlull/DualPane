@@ -85,6 +85,10 @@ struct FileTableView: NSViewRepresentable {
         table.onPaste = { coordinator.parent.onPaste() }
         table.onFocus = { coordinator.parent.onActivate() }
         table.onReturn = { coordinator.openSelection() }
+        table.onSlowClickRename = { [weak table] row in
+            guard let table else { return }
+            coordinator.beginEditing(table: table, row: row)
+        }
 
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -290,6 +294,20 @@ struct FileTableView: NSViewRepresentable {
             cell?.textField?.isEditable = true
             cell?.textField?.isSelectable = true
             table.editColumn(0, row: row, with: nil, select: true)
+            selectBaseName(of: cell?.textField, in: table)
+        }
+
+        /// Finder behaviour: pre-select only the part of the name before the
+        /// extension, so typing replaces "report" in "report.pdf" and leaves
+        /// ".pdf" intact.
+        private func selectBaseName(of field: NSTextField?, in table: NSTableView) {
+            guard let field,
+                  let editor = table.window?.fieldEditor(false, for: field) as? NSTextView
+            else { return }
+            let name = field.stringValue as NSString
+            let base = name.deletingPathExtension as NSString
+            guard base.length > 0, base.length < name.length else { return }
+            editor.setSelectedRange(NSRange(location: 0, length: base.length))
         }
 
         func controlTextDidBeginEditing(_ obj: Notification) {
@@ -476,7 +494,6 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Open in Terminal", #selector(menuTerminal)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("Rename…", #selector(menuRename)))
-            menu.addItem(makeMenuItem("Delete", #selector(menuDelete)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("New Folder", #selector(menuNewFolder)))
             menu.addItem(makeMenuItem("New File", #selector(menuNewFile)))
@@ -484,6 +501,10 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Copy", #selector(menuCopy)))
             menu.addItem(makeMenuItem("Cut", #selector(menuCut)))
             menu.addItem(makeMenuItem("Paste", #selector(menuPaste)))
+            menu.addItem(.separator())
+            // Delete sits just above Refresh, away from Rename…, so a stray
+            // click near the top of the menu can't trash the selection.
+            menu.addItem(makeMenuItem("Delete", #selector(menuDelete)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("Refresh", #selector(menuRefresh)))
             return menu
@@ -616,6 +637,35 @@ final class PaneTableView: NSTableView {
     var onPaste: (() -> Void)?
     var onFocus: (() -> Void)?
     var onReturn: (() -> Void)?
+    /// Finder-style "click an already-selected row again to rename it".
+    var onSlowClickRename: ((Int) -> Void)?
+    private var pendingRename: DispatchWorkItem?
+
+    func cancelPendingRename() {
+        pendingRename?.cancel()
+        pendingRename = nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        let hadFocus = window?.firstResponder === self
+        let wasOnlySelection = selectedRowIndexes.count == 1 && selectedRow == row
+        cancelPendingRename()
+        super.mouseDown(with: event)
+        // Only a plain second click on the one row that was already selected,
+        // in a pane that already had focus, starts a rename. A double-click
+        // arrives as its own mouseDown and cancels the pending work first.
+        let modifiers: NSEvent.ModifierFlags = [.command, .shift, .control, .option]
+        guard event.clickCount == 1, row >= 0, hadFocus, wasOnlySelection,
+              event.modifierFlags.intersection(modifiers).isEmpty else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.selectedRowIndexes.count == 1, self.selectedRow == row else { return }
+            self.onSlowClickRename?(row)
+        }
+        pendingRename = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval + 0.1, execute: work)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
@@ -624,6 +674,7 @@ final class PaneTableView: NSTableView {
     }
 
     override func keyDown(with event: NSEvent) {
+        cancelPendingRename()
         if event.keyCode == 36 || event.keyCode == 76 { // Return / Enter
             onReturn?()
             return

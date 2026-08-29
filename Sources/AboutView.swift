@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.2"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.2", date: "29 Aug 2026", changes: [
+            "Rename like Finder: click a file or folder that is already selected, pause, and its name becomes editable in place",
+            "Renaming now pre-selects just the name and leaves the extension alone, so typing replaces “report” in “report.pdf” without touching “.pdf”",
+            "Moved Delete to the bottom of the right-click menu, just above Refresh, so it is not next to Rename…",
+        ]),
         Release(version: "3.1", date: "27 Aug 2026", changes: [
             "Fixed the real reason ⌘⌫, Rename, Copy and Move often did nothing: the toolbar and menu were not being told when your selection changed, so the commands stayed greyed out even with a file clearly highlighted",
             "Clicking a file name now always selects the row — the name field no longer swallows the click and starts renaming by accident (renaming still works from the toolbar, the menu and the right-click menu)",
