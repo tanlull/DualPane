@@ -130,7 +130,7 @@ struct FileTableView: NSViewRepresentable {
                 .filter { model.selection.contains($0.element.url) }
                 .map(\.offset)
         )
-        if table.selectedRowIndexes != desired {
+        if table.selectedRowIndexes != desired, !table.isTrackingMouse {
             coordinator.isSyncingSelection = true
             table.selectRowIndexes(desired, byExtendingSelection: false)
             coordinator.isSyncingSelection = false
@@ -646,7 +646,18 @@ final class PaneTableView: NSTableView {
         pendingRename = nil
     }
 
+    /// True while a click/drag gesture is in flight. AppKit's mouse-tracking
+    /// loop keeps the run loop spinning, so SwiftUI can push an update — and
+    /// re-apply `model.selection` to the table — *in the middle* of a drag.
+    /// If that model selection is even briefly behind (a pane that just became
+    /// active, a reload that pruned it), the table collapses to a single row
+    /// before AppKit reads the selection to build the drag, and only one file
+    /// gets dropped. The view layer skips its selection sync while this is set.
+    private(set) var isTrackingMouse = false
+
     override func mouseDown(with event: NSEvent) {
+        isTrackingMouse = true
+        defer { isTrackingMouse = false }
         let point = convert(event.locationInWindow, from: nil)
         let row = self.row(at: point)
         let hadFocus = window?.firstResponder === self

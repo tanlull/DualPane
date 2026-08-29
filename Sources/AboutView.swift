@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.2"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.3"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,9 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.3", date: "29 Aug 2026", changes: [
+            "Dragging several selected files onto a folder now moves all of them — the list could collapse to just one file mid-drag, so only that one arrived",
+        ]),
         Release(version: "3.2", date: "29 Aug 2026", changes: [
             "Rename like Finder: click a file or folder that is already selected, pause, and its name becomes editable in place",
             "Renaming now pre-selects just the name and leaves the extension alone, so typing replaces “report” in “report.pdf” without touching “.pdf”",
