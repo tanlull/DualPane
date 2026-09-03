@@ -235,25 +235,26 @@ struct ContentView: View {
 
     // MARK: - Toolbar
 
-    // One name filter for both panes at once: typing narrows each pane to the
-    // matching items in its own folder. ⌘F (View > Filter Files) focuses it.
+    // Name filter for the pane you are working in. Each pane keeps its own
+    // filter, so the field follows the active pane and shows what that pane is
+    // filtered by. ⌘F (View > Filter Files) focuses it.
     private var filterField: some View {
         HStack(spacing: 4) {
             Image(systemName: "magnifyingglass")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField("Filter both panes", text: Binding(
-                get: { active.searchText },
-                set: { leftPane.searchText = $0; rightPane.searchText = $0 }
-            ))
+            TextField(activeSide == .left ? "Filter left pane" : "Filter right pane",
+                      text: Binding(
+                          get: { active.searchText },
+                          set: { active.searchText = $0 }
+                      ))
             .textFieldStyle(.plain)
             .font(.callout)
             .focused($filterFocused)
             .onSubmit { filterFocused = false }
             if !active.searchText.isEmpty {
                 Button {
-                    leftPane.searchText = ""
-                    rightPane.searchText = ""
+                    active.searchText = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.caption)
@@ -274,7 +275,7 @@ struct ContentView: View {
                         .stroke(Color(nsColor: .separatorColor))
                 )
         )
-        .help("Filter both panes by name (⌘F)")
+        .help("Filter the active pane by name (⌘F)")
         .onChange(of: appActions.focusFilterRequest) { requested in
             guard requested else { return }
             filterFocused = true
