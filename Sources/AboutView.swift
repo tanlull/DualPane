@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.4"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.5"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,10 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.5", date: "3 Sep 2026", changes: [
+            "The name filter now lives in the main toolbar next to Swap, and filters both panes at once instead of one",
+            "It stays on as you move between folders — click the × (or empty the box) to see everything again",
+        ]),
         Release(version: "3.4", date: "3 Sep 2026", changes: [
             "Each pane now has its own search box — type to filter the current folder by name as you go",
             "⌘F jumps straight to the filter box of the pane you are working in; the × button clears it",

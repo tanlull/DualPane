@@ -143,9 +143,6 @@ final class PaneModel: ObservableObject, Identifiable {
             applySort()
         }
     }
-    // Set to true to move keyboard focus into this pane's search field (⌘F).
-    // The pane view consumes it and sets it back to false.
-    @Published var focusSearchRequest = false
     // Finder label number to filter by; nil shows everything
     @Published var tagFilter: Int? {
         didSet { reload() }
@@ -388,7 +385,6 @@ final class PaneModel: ObservableObject, Identifiable {
         history.append(directory)
         directory = url.standardizedFileURL
         selection.removeAll()
-        searchText = "" // a filter typed for one folder shouldn't hide the next
         if tagFilter != nil {
             tagFilter = nil // didSet reloads with the new directory
         } else {
@@ -406,7 +402,6 @@ final class PaneModel: ObservableObject, Identifiable {
         guard let previous = history.popLast() else { return }
         directory = previous
         selection.removeAll()
-        searchText = ""
         if tagFilter != nil {
             tagFilter = nil
         } else {
