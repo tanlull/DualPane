@@ -50,6 +50,13 @@ struct AppCommands: Commands {
             .keyboardShortcut(.delete, modifiers: .command)
             .disabled(!actions.canDelete)
         }
+        // View > Find (⌘F) focuses the active pane's filter field.
+        CommandGroup(after: .toolbar) {
+            Button("Find in Pane") {
+                actions.findRequested?()
+            }
+            .keyboardShortcut("f", modifiers: .command)
+        }
         CommandGroup(replacing: .appInfo) {
             Button("About \(AppInfo.name)") {
                 openWindow(id: "about")

@@ -21,4 +21,7 @@ final class AppActions: ObservableObject {
 
     /// Asks ContentView to present the delete confirmation.
     var deleteRequested: (() -> Void)?
+
+    /// Asks ContentView to focus the active pane's search filter (⌘F).
+    var findRequested: (() -> Void)?
 }

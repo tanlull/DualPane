@@ -196,11 +196,17 @@ struct ContentView: View {
         .onChange(of: active.selection) { newValue in
             AppActions.shared.selectionCount = newValue.count
         }
-        .onChange(of: activeSide) { _ in
+        .onChange(of: activeSide) { side in
             AppActions.shared.selectionCount = active.selection.count
+            // Re-bind ⌘F: the closure captures this view value, so it has to be
+            // refreshed whenever the active pane changes.
+            let tabs = side == .left ? leftTabs : rightTabs
+            AppActions.shared.findRequested = { tabs.current.focusSearchRequest = true }
         }
         .onAppear {
             AppActions.shared.deleteRequested = { confirmDelete = true }
+            let tabs = leftTabs // activeSide starts on the left; rebound on change
+            AppActions.shared.findRequested = { tabs.current.focusSearchRequest = true }
             AppActions.shared.selectionCount = active.selection.count
             UndoStore.shared.onDidUndo = {
                 leftPane.reload()
@@ -800,6 +806,7 @@ struct PaneView: View {
     let onNewFile: () -> Void
 
     @State private var tabScrollCursor = 0
+    @FocusState private var searchFocused: Bool
     @State private var tabsContentWidth: CGFloat = 0
     @State private var tabsContainerWidth: CGFloat = 0
     private var tabsOverflow: Bool { tabsContentWidth > tabsContainerWidth + 1 }
@@ -867,6 +874,50 @@ struct PaneView: View {
         .frame(maxWidth: 360)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .padding()
+    }
+
+    // Live name filter for this pane's listing. Typing narrows the table as
+    // you go; ⌘F (View > Find) puts the cursor here for the active pane.
+    private var searchField: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("Filter", text: $model.searchText)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .focused($searchFocused)
+                .onTapGesture { onActivate() }
+                .onSubmit { searchFocused = false }
+            if !model.searchText.isEmpty {
+                Button {
+                    model.searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear filter")
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .frame(width: 170)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color(nsColor: .textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(Color(nsColor: .separatorColor))
+                )
+        )
+        .help("Filter this pane by name")
+        .onChange(of: model.focusSearchRequest) { requested in
+            guard requested else { return }
+            searchFocused = true
+            model.focusSearchRequest = false
+        }
     }
 
     private var filterTint: Color {
@@ -1163,6 +1214,7 @@ struct PaneView: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.callout)
                 .onSubmit { model.submitPath() }
+            searchField
             Button { model.reload() } label: { Image(systemName: "arrow.clockwise") }
                 .help("Refresh")
         }

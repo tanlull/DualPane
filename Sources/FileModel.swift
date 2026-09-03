@@ -113,6 +113,9 @@ final class PaneModel: ObservableObject, Identifiable {
             watcher.start(directory)
         }
     }
+    // Everything read from disk (or Spotlight), before the search filter.
+    private var allItems: [FileItem] = []
+    // What the table shows: `allItems` narrowed by `searchText`, sorted.
     @Published var items: [FileItem] = []
     @Published var selection = Set<URL>()
     @Published var pathText: String
@@ -132,6 +135,17 @@ final class PaneModel: ObservableObject, Identifiable {
             reload()
         }
     }
+    // Live name filter for this pane. Empty shows everything. Filtering is
+    // done in memory, so it costs no directory re-read.
+    @Published var searchText = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            applySort()
+        }
+    }
+    // Set to true to move keyboard focus into this pane's search field (⌘F).
+    // The pane view consumes it and sets it back to false.
+    @Published var focusSearchRequest = false
     // Finder label number to filter by; nil shows everything
     @Published var tagFilter: Int? {
         didSet { reload() }
@@ -222,15 +236,15 @@ final class PaneModel: ObservableObject, Identifiable {
                     }
                 }
             }
-            items = urls.map { makeItem(url: $0) }
+            allItems = urls.map { makeItem(url: $0) }
             if directory.lastPathComponent == "com~apple~CloudDocs" {
-                items += appLibraryItems()
+                allItems += appLibraryItems()
             }
             loadError = nil
         } catch {
             // Surface the failure instead of silently showing an empty pane —
             // this is what users hit on iCloud Drive / OneDrive folders.
-            items = []
+            allItems = []
             loadError = error.localizedDescription
         }
         applySort(previous: previousItems)
@@ -340,7 +354,7 @@ final class PaneModel: ObservableObject, Identifiable {
             let urls = paths.map { URL(fileURLWithPath: $0) }
             await MainActor.run { [weak self] in
                 guard let self, token == self.searchToken, self.tagFilter == label else { return }
-                self.items = urls.map { self.makeItem(url: $0) }
+                self.allItems = urls.map { self.makeItem(url: $0) }
                 self.applySort()
                 self.selection = self.selection.filter { sel in self.items.contains { $0.url == sel } }
             }
@@ -348,13 +362,17 @@ final class PaneModel: ObservableObject, Identifiable {
     }
 
     private func applySort(previous: [FileItem]? = nil) {
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        let visible = query.isEmpty
+            ? allItems
+            : allItems.filter { $0.name.localizedCaseInsensitiveContains(query) }
         let sorted: [FileItem]
         if foldersFirst {
-            let dirs = items.filter(\.isDirectory).sorted(using: sortOrder)
-            let files = items.filter { !$0.isDirectory }.sorted(using: sortOrder)
+            let dirs = visible.filter(\.isDirectory).sorted(using: sortOrder)
+            let files = visible.filter { !$0.isDirectory }.sorted(using: sortOrder)
             sorted = dirs + files
         } else {
-            sorted = items.sorted(using: sortOrder)
+            sorted = visible.sorted(using: sortOrder)
         }
         items = sorted
         // The table view reloads on a revision bump, so only bump when the list
@@ -370,6 +388,7 @@ final class PaneModel: ObservableObject, Identifiable {
         history.append(directory)
         directory = url.standardizedFileURL
         selection.removeAll()
+        searchText = "" // a filter typed for one folder shouldn't hide the next
         if tagFilter != nil {
             tagFilter = nil // didSet reloads with the new directory
         } else {
@@ -387,6 +406,7 @@ final class PaneModel: ObservableObject, Identifiable {
         guard let previous = history.popLast() else { return }
         directory = previous
         selection.removeAll()
+        searchText = ""
         if tagFilter != nil {
             tagFilter = nil
         } else {
@@ -428,6 +448,10 @@ final class PaneModel: ObservableObject, Identifiable {
         var text = "\(dirCount) folders, \(fileCount) files"
         if let filter = tagFilter, let name = Self.tagNames[filter] {
             text = "Tag “\(name)” in Home  •  " + text
+        }
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        if !query.isEmpty {
+            text = "Filter “\(query)”  •  " + text + " of \(allItems.count)"
         }
         if !selection.isEmpty {
             let bytes = selectedItems.filter { !$0.isDirectory }.reduce(Int64(0)) { $0 + $1.size }
