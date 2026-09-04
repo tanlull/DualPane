@@ -146,6 +146,7 @@ fileprivate final class DPFetchState: @unchecked Sendable {
     private var _doneBytes = 0
     private var _stopped = false
     private var _blockedOn: URL?
+    private var _slow = 0
     private var _lastAdvance = Date()
 
     func take() -> Int? {
@@ -160,10 +161,88 @@ fileprivate final class DPFetchState: @unchecked Sendable {
     func stop(blockedOn url: URL?) {
         lock.lock(); _stopped = true; if _blockedOn == nil { _blockedOn = url }; lock.unlock()
     }
-    var snapshot: (done: Int, bytes: Int, stopped: Bool, blockedOn: URL?, idle: TimeInterval) {
-        lock.lock(); defer { lock.unlock() }
-        return (_done, _doneBytes, _stopped, _blockedOn, Date().timeIntervalSince(_lastAdvance))
+    // A file that did not arrive in time. One slow file must not sink a
+    // transfer that is otherwise moving: note it and carry on with the rest.
+    func giveUp(on url: URL) {
+        lock.lock(); _slow += 1; _blockedOn = url; lock.unlock()
     }
+    var snapshot: (done: Int, bytes: Int, slow: Int, stopped: Bool, blockedOn: URL?, idle: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        return (_done, _doneBytes, _slow, _stopped, _blockedOn, Date().timeIntervalSince(_lastAdvance))
+    }
+}
+
+// Fetches every online-only file in `pending`, in parallel, reporting progress
+// and honouring the Stop button. Split out from dpMaterialize so this logic can
+// be tested with a stand-in for `fetch`.
+fileprivate func dpFetchAll(_ pending: [URL], sizes: [Int], label name: String, bytes pendingBytes: Int,
+                            fm: FileManager, progress: TransferProgress,
+                            fileTimeout: TimeInterval, stallTimeout: TimeInterval,
+                            fetch: @escaping @Sendable (URL, TimeInterval) -> DPFetchOutcome = dpFetch) throws {
+    let total = pending.count
+    let totalBytes = dpBytes(pendingBytes)
+    progress.post("“\(name)”: \(total) files (\(totalBytes)) are online-only — downloading from iCloud…", force: true)
+
+    // Legacy iCloud Drive still honours this; the File Provider ignores it.
+    // Harmless either way, so ask nicely before falling back to reading.
+    for u in pending.prefix(500) { try? fm.startDownloadingUbiquitousItem(at: u) }
+
+    // Fetch in parallel — one blocked file must not hold up the rest.
+    let state = DPFetchState()
+    let workers = min(6, total)
+    let group = DispatchGroup()
+    for _ in 0..<workers {
+        DispatchQueue.global(qos: .userInitiated).async(group: group) {
+            while let i = state.take(), i < total {
+                switch fetch(pending[i], fileTimeout) {
+                case .ok, .failed:
+                    // A file that errors (a broken iCloud entry, say) is not a
+                    // stall — let the copy itself report it properly.
+                    state.finished(bytes: sizes[i])
+                case .timedOut:
+                    // macOS keeps fetching this one in the background; move on
+                    // to the others rather than stopping everything.
+                    state.giveUp(on: pending[i])
+                }
+            }
+        }
+    }
+
+    func stalled(_ now: (done: Int, bytes: Int, slow: Int, stopped: Bool, blockedOn: URL?, idle: TimeInterval)) -> TransferError {
+        let blocked = now.blockedOn?.lastPathComponent ?? "its files"
+        let remaining = total - now.done
+        return TransferError(message: """
+            “\(name)” was not copied — the original is untouched.
+
+            Still online-only in iCloud: \(remaining) of its \(total) files \
+            (\(totalBytes) total). iCloud is not sending them — “\(blocked)” did not answer in time.
+
+            macOS keeps fetching them in the background, so whatever arrives meanwhile \
+            makes the next attempt quicker. Open the folder in Finder, let it finish \
+            downloading (or right-click it and choose Download Now), then copy again.
+            """)
+    }
+
+    // Wait on the workers, surfacing progress until they finish, the user stops
+    // them, or nothing at all arrives for a while.
+    while group.wait(timeout: .now() + 0.2) == .timedOut {
+        let now = state.snapshot
+        if progress.isCancelled {
+            state.stop(blockedOn: nil)
+            throw TransferError.cancelled
+        }
+        // Fail only when the *whole* fetch has gone quiet — individual slow
+        // files are tolerated for as long as anything else is still arriving.
+        if now.idle > stallTimeout {
+            state.stop(blockedOn: nil)
+            throw stalled(now)
+        }
+        let slow = now.slow > 0 ? " (\(now.slow) still waiting on iCloud)" : ""
+        progress.post("Downloading “\(name)” from iCloud — \(now.done) of \(total) files (\(dpBytes(now.bytes)) of \(totalBytes))…\(slow)")
+    }
+    let outcome = state.snapshot
+    // Anything that never arrived means the copy would be incomplete: refuse.
+    if outcome.slow > 0 || outcome.done < total { throw stalled(outcome) }
 }
 
 // Online-only iCloud items must be materialized before they're copied,
@@ -182,8 +261,8 @@ fileprivate final class DPFetchState: @unchecked Sendable {
 // Returns the number of items in the tree, used as the copy progress total.
 @discardableResult
 fileprivate func dpMaterialize(_ url: URL, fm: FileManager, progress: TransferProgress,
-                               fileTimeout: TimeInterval = 45,
-                               stallTimeout: TimeInterval = 90) throws -> Int {
+                               fileTimeout: TimeInterval = 60,
+                               stallTimeout: TimeInterval = 120) throws -> Int {
     let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey, .fileSizeKey]
 
     // Fast path: only iCloud (ubiquitous) items can need materializing, and
@@ -227,66 +306,9 @@ fileprivate func dpMaterialize(_ url: URL, fm: FileManager, progress: TransferPr
     let itemCount = scanned + 1
     guard !pending.isEmpty else { return itemCount }
 
-    let total = pending.count
-    let totalBytes = dpBytes(pendingBytes)
-    progress.post("“\(name)”: \(total) files (\(totalBytes)) are online-only — downloading from iCloud…", force: true)
-
-    // Legacy iCloud Drive still honours this; the File Provider ignores it.
-    // Harmless either way, so ask nicely before falling back to reading.
-    for u in pending.prefix(500) { try? fm.startDownloadingUbiquitousItem(at: u) }
-
-    // Fetch in parallel — one blocked file must not hold up the rest.
-    let state = DPFetchState()
-    let workers = min(6, total)
-    let group = DispatchGroup()
-    for _ in 0..<workers {
-        DispatchQueue.global(qos: .userInitiated).async(group: group) {
-            while let i = state.take(), i < total {
-                switch dpFetch(pending[i], timeout: fileTimeout) {
-                case .ok, .failed:
-                    // A file that errors (a broken iCloud entry, say) is not a
-                    // stall — let the copy itself report it properly.
-                    state.finished(bytes: sizes[i])
-                case .timedOut:
-                    state.stop(blockedOn: pending[i])
-                    return
-                }
-            }
-        }
-    }
-
-    func stalled(_ now: (done: Int, bytes: Int, stopped: Bool, blockedOn: URL?, idle: TimeInterval)) -> TransferError {
-        let blocked = now.blockedOn?.lastPathComponent ?? "its files"
-        let remaining = total - now.done
-        return TransferError(message: """
-            “\(name)” was not copied — the original is untouched.
-
-            \(remaining) of its \(total) files (\(totalBytes) total) are stored online-only \
-            in iCloud, and iCloud is not sending them: reading “\(blocked)” timed out.
-
-            Open the folder in Finder and wait for it to finish downloading \
-            (or right-click it and choose Download Now), then copy again.
-            """)
-    }
-
-    // Wait on the workers, surfacing progress until they finish, the user stops
-    // them, or iCloud goes quiet for too long.
-    while group.wait(timeout: .now() + 0.2) == .timedOut {
-        let now = state.snapshot
-        if progress.isCancelled {
-            state.stop(blockedOn: nil)
-            throw TransferError.cancelled
-        }
-        if now.stopped || now.idle > stallTimeout {
-            state.stop(blockedOn: nil)
-            throw stalled(now)
-        }
-        progress.post("Downloading “\(name)” from iCloud — \(now.done) of \(total) files (\(dpBytes(now.bytes)) of \(totalBytes))…")
-    }
-    let outcome = state.snapshot
-    if outcome.stopped { throw stalled(outcome) }
-    try progress.checkCancelled()
-    progress.post("Downloaded \(total) files from iCloud.", force: true)
+    try dpFetchAll(pending, sizes: sizes, label: name, bytes: pendingBytes, fm: fm,
+                   progress: progress, fileTimeout: fileTimeout, stallTimeout: stallTimeout)
+    progress.post("Downloaded \(pending.count) files from iCloud.", force: true)
     return itemCount
 }
 

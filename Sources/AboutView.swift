@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.8"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.9"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.9", date: "4 Sep 2026", changes: [
+            "One slow file from iCloud no longer cancels the whole copy: DualPane keeps fetching everything else and only gives up when nothing at all has arrived for two minutes",
+            "The status line now says how many files are still waiting on iCloud while the rest come down",
+            "If it does give up, the message explains that macOS keeps downloading in the background, so trying again later gets further",
+        ]),
         Release(version: "3.8", date: "4 Sep 2026", changes: [
             "Copying a folder from an iCloud Desktop no longer freezes at “Copying…” forever: DualPane now shows what it is doing at every step — checking the folder, downloading each online-only file, then copying — and a Stop button cancels at any point",
             "When iCloud will not hand over online-only files, the copy now stops with a plain explanation (how many files, how big, which one is stuck) instead of hanging, and your original is left untouched",
