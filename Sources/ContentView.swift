@@ -24,66 +24,270 @@ fileprivate func dpIsSameItem(_ a: URL, _ b: URL) -> Bool {
 // A transfer that could not be completed safely.
 struct TransferError: LocalizedError {
     let message: String
+    var isCancellation = false
     var errorDescription: String? { message }
+    static let cancelled = TransferError(message: "Cancelled", isCancellation: true)
 }
 
-// Online-only iCloud items must be downloaded before they're copied, otherwise
-// the copy is silently incomplete (you get an empty placeholder, not the data).
-// This *throws* when it can't finish: a partial materialize must abort the
-// transfer, never fall through and copy 0-byte placeholders — and for a move
-// that means the source is still untouched when we give up.
-fileprivate func dpMaterialize(_ url: URL, fm: FileManager,
-                               timeout: TimeInterval = 600,
-                               report: ((String) -> Void)? = nil) throws {
-    let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
+// Shared, thread-safe progress channel for one transfer: carries status text
+// back to the status bar and a cancel flag forward into the file operations.
+// Copying from iCloud can take minutes (every online-only file is fetched over
+// the network), so the user must always be able to see what is happening and
+// stop it.
+final class TransferProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var lastPost = Date.distantPast
+    private var lastText = ""
+    private let sink: @Sendable (String) -> Void
+
+    init(sink: @escaping @Sendable (String) -> Void) { self.sink = sink }
+
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    func checkCancelled() throws { if isCancelled { throw TransferError.cancelled } }
+
+    // Rate-limited: a 40,000-file folder must not post 40,000 UI updates.
+    func post(_ text: String, force: Bool = false) {
+        lock.lock()
+        let now = Date()
+        // Also skip repeats: polling a slow download would otherwise post the
+        // same line several times a second.
+        let due = force || (now.timeIntervalSince(lastPost) > 0.15 && text != lastText)
+        if due { lastPost = now; lastText = text }
+        lock.unlock()
+        if due { sink(text) }
+    }
+}
+
+// Human-readable byte count for status messages. Plain numbers only —
+// the default formatter renders 0 as "Zero KB".
+fileprivate func dpBytes(_ count: Int) -> String {
+    let formatter = ByteCountFormatter()
+    formatter.countStyle = .file
+    formatter.allowsNonnumericFormatting = false
+    return formatter.string(fromByteCount: Int64(count))
+}
+
+// Reports every file a copy touches, and lets the user stop it. FileManager
+// calls the delegate once per item, which is the only progress signal a
+// recursive copyItem gives us.
+fileprivate final class DPCopyReporter: NSObject, FileManagerDelegate {
+    let progress: TransferProgress
+    let name: String
+    let expected: Int      // 0 when unknown
+    private(set) var copied = 0
+
+    init(progress: TransferProgress, name: String, expected: Int) {
+        self.progress = progress
+        self.name = name
+        self.expected = expected
+    }
+
+    private func advance() -> Bool {
+        if progress.isCancelled { return false }
+        copied += 1
+        if expected > 0 {
+            progress.post("Copying “\(name)” — \(copied) of \(expected) items…")
+        } else {
+            progress.post("Copying “\(name)” — \(copied) items…")
+        }
+        return true
+    }
+
+    func fileManager(_ fileManager: FileManager, shouldCopyItemAt srcURL: URL, to dstURL: URL) -> Bool {
+        advance()
+    }
+    func fileManager(_ fileManager: FileManager, shouldLinkItemAt srcURL: URL, to dstURL: URL) -> Bool {
+        advance()
+    }
+}
+
+// Reading one byte of an online-only file is what actually makes macOS fetch
+// it: `startDownloadingUbiquitousItem` is a no-op for the modern File Provider
+// that serves an iCloud Desktop/Documents, so waiting on the download *status*
+// waits forever. The read itself is uninterruptible, so it runs on its own
+// thread and we wait with a timeout — when iCloud is not delivering, the thread
+// stays blocked in the kernel but the app stays responsive and can give up.
+fileprivate enum DPFetchOutcome { case ok, failed(Error), timedOut }
+
+fileprivate func dpFetch(_ url: URL, timeout: TimeInterval) -> DPFetchOutcome {
+    let box = DPOutcomeBox()
+    let done = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            _ = try handle.read(upToCount: 1)
+            try? handle.close()
+            box.value = .ok
+        } catch {
+            box.value = .failed(error)
+        }
+        done.signal()
+    }
+    if done.wait(timeout: .now() + timeout) == .timedOut { return .timedOut }
+    return box.value
+}
+
+fileprivate final class DPOutcomeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: DPFetchOutcome = .timedOut
+    var value: DPFetchOutcome {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
+// Shared counters for the parallel fetch below.
+fileprivate final class DPFetchState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var next = 0
+    private var _done = 0
+    private var _doneBytes = 0
+    private var _stopped = false
+    private var _blockedOn: URL?
+    private var _lastAdvance = Date()
+
+    func take() -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        if _stopped { return nil }
+        defer { next += 1 }
+        return next
+    }
+    func finished(bytes: Int) {
+        lock.lock(); _done += 1; _doneBytes += bytes; _lastAdvance = Date(); lock.unlock()
+    }
+    func stop(blockedOn url: URL?) {
+        lock.lock(); _stopped = true; if _blockedOn == nil { _blockedOn = url }; lock.unlock()
+    }
+    var snapshot: (done: Int, bytes: Int, stopped: Bool, blockedOn: URL?, idle: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        return (_done, _doneBytes, _stopped, _blockedOn, Date().timeIntervalSince(_lastAdvance))
+    }
+}
+
+// Online-only iCloud items must be materialized before they're copied,
+// otherwise the copy is silently incomplete. Three things matter here:
+//
+//  * Only `.notDownloaded` items need fetching. `.downloaded` means the real
+//    data is already on disk (just possibly not the newest version), and
+//    treating that as "needs downloading" made this wait on tens of thousands
+//    of files that were already local — the transfer looked frozen forever.
+//  * Fetching is done by reading, not by `startDownloadingUbiquitousItem`,
+//    which does nothing for File-Provider-backed iCloud folders.
+//  * Giving up must *throw*. Falling through would copy 0-byte placeholders,
+//    and on a move the source is only removed after this returns, so throwing
+//    here is what keeps the original safe.
+//
+// Returns the number of items in the tree, used as the copy progress total.
+@discardableResult
+fileprivate func dpMaterialize(_ url: URL, fm: FileManager, progress: TransferProgress,
+                               fileTimeout: TimeInterval = 45,
+                               stallTimeout: TimeInterval = 90) throws -> Int {
+    let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey, .fileSizeKey]
 
     // Fast path: only iCloud (ubiquitous) items can need materializing, and
-    // they only live under ~/Library/Mobile Documents. For everything else,
-    // return immediately — the recursive scan below used to walk every file
-    // inside local folders and made ordinary moves/copies noticeably slow.
+    // they only live under ~/Library/Mobile Documents (which is where an
+    // iCloud-synced Desktop and Documents live too). For everything else,
+    // return immediately — walking every file inside ordinary local folders
+    // made plain moves and copies noticeably slow.
     let isUbiquitous = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
     if !isUbiquitous,
        !url.resolvingSymlinksInPath().path.contains("/Mobile Documents/") {
-        return
+        return 0
     }
-
-    var pending: [URL] = []
-    func consider(_ u: URL) {
-        guard let v = try? u.resourceValues(forKeys: keys), v.isUbiquitousItem == true else { return }
-        if v.ubiquitousItemDownloadingStatus != .current {
-            try? fm.startDownloadingUbiquitousItem(at: u)
-            pending.append(u)
-        }
-    }
-    consider(url)
-    if let e = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
-        for case let child as URL in e { consider(child) }
-    }
-    guard !pending.isEmpty else { return }
 
     let name = url.lastPathComponent
-    let total = pending.count
-    let deadline = Date().addingTimeInterval(timeout)
-    var done = 0
-    for u in pending {
-        report?("Downloading “\(name)” from iCloud — \(done + 1) of \(total)…")
-        while true {
-            let status = (try? u.resourceValues(forKeys: keys))?.ubiquitousItemDownloadingStatus
-            if status == .current { break }
-            if Date() >= deadline {
-                // Out of time with data still in the cloud. Report exactly what
-                // is missing instead of copying an incomplete item.
-                let remaining = total - done
-                throw TransferError(message: """
-                    “\(name)” was not copied: \(remaining) of \(total) item\(remaining == 1 ? " is" : "s are") \
-                    still downloading from iCloud (first: “\(u.lastPathComponent)”). \
-                    Wait for iCloud to finish downloading it, then try again.
-                    """)
-            }
-            Thread.sleep(forTimeInterval: 0.2)
+    var pending: [URL] = []
+    var sizes: [Int] = []
+    var pendingBytes = 0
+    var scanned = 0
+
+    func consider(_ u: URL) {
+        guard let v = try? u.resourceValues(forKeys: keys), v.isUbiquitousItem == true else { return }
+        if v.ubiquitousItemDownloadingStatus == .notDownloaded {
+            pending.append(u)
+            sizes.append(v.fileSize ?? 0)
+            pendingBytes += v.fileSize ?? 0
         }
-        done += 1
     }
+
+    progress.post("Checking “\(name)” for online-only files…", force: true)
+    consider(url)
+    if let e = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
+        for case let child as URL in e {
+            scanned += 1
+            if scanned % 200 == 0 {
+                try progress.checkCancelled()
+                progress.post("Checking “\(name)” for online-only files — \(scanned) items…")
+            }
+            consider(child)
+        }
+    }
+    let itemCount = scanned + 1
+    guard !pending.isEmpty else { return itemCount }
+
+    let total = pending.count
+    let totalBytes = dpBytes(pendingBytes)
+    progress.post("“\(name)”: \(total) files (\(totalBytes)) are online-only — downloading from iCloud…", force: true)
+
+    // Legacy iCloud Drive still honours this; the File Provider ignores it.
+    // Harmless either way, so ask nicely before falling back to reading.
+    for u in pending.prefix(500) { try? fm.startDownloadingUbiquitousItem(at: u) }
+
+    // Fetch in parallel — one blocked file must not hold up the rest.
+    let state = DPFetchState()
+    let workers = min(6, total)
+    let group = DispatchGroup()
+    for _ in 0..<workers {
+        DispatchQueue.global(qos: .userInitiated).async(group: group) {
+            while let i = state.take(), i < total {
+                switch dpFetch(pending[i], timeout: fileTimeout) {
+                case .ok, .failed:
+                    // A file that errors (a broken iCloud entry, say) is not a
+                    // stall — let the copy itself report it properly.
+                    state.finished(bytes: sizes[i])
+                case .timedOut:
+                    state.stop(blockedOn: pending[i])
+                    return
+                }
+            }
+        }
+    }
+
+    func stalled(_ now: (done: Int, bytes: Int, stopped: Bool, blockedOn: URL?, idle: TimeInterval)) -> TransferError {
+        let blocked = now.blockedOn?.lastPathComponent ?? "its files"
+        let remaining = total - now.done
+        return TransferError(message: """
+            “\(name)” was not copied — the original is untouched.
+
+            \(remaining) of its \(total) files (\(totalBytes) total) are stored online-only \
+            in iCloud, and iCloud is not sending them: reading “\(blocked)” timed out.
+
+            Open the folder in Finder and wait for it to finish downloading \
+            (or right-click it and choose Download Now), then copy again.
+            """)
+    }
+
+    // Wait on the workers, surfacing progress until they finish, the user stops
+    // them, or iCloud goes quiet for too long.
+    while group.wait(timeout: .now() + 0.2) == .timedOut {
+        let now = state.snapshot
+        if progress.isCancelled {
+            state.stop(blockedOn: nil)
+            throw TransferError.cancelled
+        }
+        if now.stopped || now.idle > stallTimeout {
+            state.stop(blockedOn: nil)
+            throw stalled(now)
+        }
+        progress.post("Downloading “\(name)” from iCloud — \(now.done) of \(total) files (\(dpBytes(now.bytes)) of \(totalBytes))…")
+    }
+    let outcome = state.snapshot
+    if outcome.stopped { throw stalled(outcome) }
+    try progress.checkCancelled()
+    progress.post("Downloaded \(total) files from iCloud.", force: true)
+    return itemCount
 }
 
 struct ContentView: View {
@@ -121,6 +325,7 @@ struct ContentView: View {
     // drag & drop), not just the centre arrow buttons.
     @State private var transferBusy = false
     @State private var transferStatus: String?
+    @State private var transferProgress: TransferProgress?
     @State private var pendingConflict: TransferRequest?
     @Environment(\.openWindow) private var openWindow
 
@@ -483,10 +688,13 @@ struct ContentView: View {
                     .scaleEffect(0.7)
                     .frame(width: 14, height: 14)
                 Text(transferStatus ?? "Working…")
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .foregroundStyle(.primary)
+                Button("Stop") { transferProgress?.cancel() }
+                    .controlSize(.small)
+                    .help("Stop this transfer — anything not yet copied is left alone")
+                Spacer()
             } else {
             Text(leftPane.statusText)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -552,28 +760,53 @@ struct ContentView: View {
         let resolveDestination = uniqueDestination
         let total = request.sources.count
 
-        // Progress updates come from the background task, so hop to the main
-        // actor to publish them.
-        let report: @Sendable (String) -> Void = { text in
+        // Progress arrives from the background task, so hop to the main actor
+        // to publish it. The same object carries the Cancel button's flag back.
+        let progress = TransferProgress { text in
             Task { @MainActor in transferStatus = text }
         }
+        transferProgress = progress
 
         Task.detached(priority: .userInitiated) {
-            let fm = FileManager.default
+            // A private FileManager: the copy delegate must not be attached to
+            // the shared .default instance the rest of the app uses.
+            let fm = FileManager()
             var results: [(src: URL, dst: URL)] = []
-            // Every failure is kept, not just the last one.
-            var failures: [String] = []
+            var failures: [String] = []      // every failure, not just the last
+            var cancelled = false
             let started = Date()
+
             for (index, url) in request.sources.enumerated() {
                 let name = url.lastPathComponent
                 let counter = total > 1 ? " (\(index + 1) of \(total))" : ""
                 do {
+                    try progress.checkCancelled()
+
                     // Download online-only iCloud contents first so the copy is
                     // complete. This throws rather than silently proceeding, so a
                     // half-downloaded folder can never be copied as placeholders —
                     // and on a move the source is still intact when it does.
-                    try dpMaterialize(url, fm: fm) { report($0 + counter) }
-                    report("\(request.move ? "Moving" : "Copying") “\(name)”…" + counter)
+                    let itemCount = try dpMaterialize(url, fm: fm, progress: progress)
+
+                    let reporter = DPCopyReporter(progress: progress, name: name,
+                                                  expected: itemCount)
+                    fm.delegate = request.move ? nil : reporter
+                    progress.post("\(request.move ? "Moving" : "Copying") “\(name)”…\(counter)", force: true)
+                    defer { fm.delegate = nil }
+
+                    // A cancelled copy leaves a half-written destination behind:
+                    // remove it, so cancelling never leaves a partial folder that
+                    // looks like a finished one.
+                    func finish(_ target: URL) throws {
+                        if progress.isCancelled {
+                            try? fm.removeItem(at: target)
+                            throw TransferError.cancelled
+                        }
+                        if request.touchDates {
+                            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
+                        }
+                        results.append((src: url, dst: target))
+                    }
 
                     let plain = request.destDir.appendingPathComponent(url.lastPathComponent)
                     let destExists = fm.fileExists(atPath: plain.path)
@@ -586,10 +819,7 @@ struct ContentView: View {
                         if request.move { continue }
                         let target = resolveDestination(url, request.destDir)
                         try fm.copyItem(at: url, to: target)
-                        if request.touchDates {
-                            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
-                        }
-                        results.append((src: url, dst: target))
+                        try finish(target)
                         continue
                     }
 
@@ -603,15 +833,16 @@ struct ContentView: View {
                         } else {
                             try fm.copyItem(at: url, to: temp)
                         }
+                        if progress.isCancelled {
+                            try? fm.removeItem(at: temp)
+                            throw TransferError.cancelled
+                        }
                         // Never trash something that is actually the source.
                         if !dpIsSameItem(plain, url) {
                             try? fm.trashItem(at: plain, resultingItemURL: nil)
                         }
                         try fm.moveItem(at: temp, to: plain)
-                        if request.touchDates {
-                            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: plain.path)
-                        }
-                        results.append((src: url, dst: plain))
+                        try finish(plain)
                     } else {
                         // No conflict, or "Keep Both": copy/move to a fresh name.
                         let target = destExists ? resolveDestination(url, request.destDir) : plain
@@ -620,15 +851,20 @@ struct ContentView: View {
                         } else {
                             try fm.copyItem(at: url, to: target)
                         }
-                        if request.touchDates {
-                            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
-                        }
-                        results.append((src: url, dst: target))
+                        try finish(target)
                     }
+                } catch let error as TransferError where error.isCancellation {
+                    cancelled = true
                 } catch {
-                    failures.append("“\(name)”: \(error.localizedDescription)")
+                    if progress.isCancelled {
+                        cancelled = true
+                    } else {
+                        failures.append("“\(name)”: \(error.localizedDescription)")
+                    }
                 }
+                if cancelled { break }
             }
+
             if request.side != nil {
                 // Keep the spinner visible long enough to register
                 let elapsed = Date().timeIntervalSince(started)
@@ -637,12 +873,22 @@ struct ContentView: View {
                 }
             }
             let copied = results
+            let wasCancelled = cancelled
             let failureResult = failures.isEmpty ? nil : failures.joined(separator: "\n\n")
             await MainActor.run {
                 transferring = nil
                 transferBusy = false
                 transferStatus = nil
-                errorMessage = failureResult
+                transferProgress = nil
+                // Cancelling is a choice, not an error — say what survived instead.
+                if wasCancelled && failureResult == nil {
+                    let kept = copied.count
+                    errorMessage = kept == 0
+                        ? "Stopped. Nothing was copied."
+                        : "Stopped after \(kept) of \(total) item\(total == 1 ? "" : "s")."
+                } else {
+                    errorMessage = failureResult
+                }
                 if !copied.isEmpty {
                     UndoStore.shared.record(.transfer(move: request.move, pairs: copied))
                 }

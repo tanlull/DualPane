@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.7"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.8"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,12 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.8", date: "4 Sep 2026", changes: [
+            "Copying a folder from an iCloud Desktop no longer freezes at “Copying…” forever: DualPane now shows what it is doing at every step — checking the folder, downloading each online-only file, then copying — and a Stop button cancels at any point",
+            "When iCloud will not hand over online-only files, the copy now stops with a plain explanation (how many files, how big, which one is stuck) instead of hanging, and your original is left untouched",
+            "Files that iCloud already has on disk are no longer treated as needing a download — that alone was making DualPane wait on tens of thousands of files that were already there",
+            "Online-only files are now fetched by reading them, several at a time, which is what actually makes macOS download them",
+        ]),
         Release(version: "3.7", date: "4 Sep 2026", changes: [
             "Copy and Move (and paste, and drag & drop) now show a progress spinner and what they are working on in the status bar — before, only the ← / → arrow buttons did",
             "Copying from an iCloud folder (Desktop and Documents are iCloud folders) no longer copies half-empty placeholder files when a download does not finish in time: the transfer stops and tells you what is still downloading, leaving the original untouched",
