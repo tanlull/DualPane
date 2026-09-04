@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.13"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.14"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,9 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.14", date: "4 Sep 2026", changes: [
+            "Hovering a file whose name is too long for the Name column now shows the full name straight away, continuing on the same line past the column edge; names that already fit are left alone",
+        ]),
         Release(version: "3.13", date: "4 Sep 2026", changes: [
             "“Get Info” moved to the bottom of the right-click menu, so the items you use most stay at the top",
         ]),

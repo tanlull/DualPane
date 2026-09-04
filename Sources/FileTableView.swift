@@ -703,6 +703,89 @@ final class PaneTableView: NSTableView {
         DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval + 0.1, execute: work)
     }
 
+    // MARK: Hover: expand a truncated name in place
+
+    /// Finder-style hover label: when the pointer is over a row whose name is
+    /// too long for the Name column, the full name is drawn immediately, on the
+    /// same line and starting at the same x as the truncated text, so it reads
+    /// as the name simply continuing past the column edge. No tooltip delay.
+    private lazy var nameOverlay: NSTextField = {
+        let field = NSTextField(labelWithString: "")
+        field.wantsLayer = true
+        field.drawsBackground = false
+        field.lineBreakMode = .byClipping
+        field.isHidden = true
+        field.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        field.layer?.borderColor = NSColor.separatorColor.cgColor
+        field.layer?.borderWidth = 1
+        field.layer?.cornerRadius = 3
+        return field
+    }()
+    private var hoverRow = -1
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area = hoverTrackingArea { removeTrackingArea(area) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        showNameOverlay(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hideNameOverlay()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        hideNameOverlay()
+        super.scrollWheel(with: event)
+    }
+
+    override func reloadData() {
+        hideNameOverlay()
+        super.reloadData()
+    }
+
+    func hideNameOverlay() {
+        hoverRow = -1
+        nameOverlay.isHidden = true
+        nameOverlay.removeFromSuperview()
+    }
+
+    private func showNameOverlay(at point: NSPoint) {
+        let column = column(withIdentifier: .init("name"))
+        let row = self.row(at: point)
+        guard column >= 0, row >= 0, row != hoverRow || nameOverlay.isHidden else {
+            if row < 0 { hideNameOverlay() }
+            return
+        }
+        guard let cell = view(atColumn: column, row: row, makeIfNecessary: false) as? NSTableCellView,
+              let text = cell.textField, !text.isEditable else { hideNameOverlay(); return }
+        let frame = convert(text.bounds, from: text)
+        let needed = ceil(text.attributedStringValue.size().width)
+        guard needed > frame.width else { hideNameOverlay(); return }
+
+        hoverRow = row
+        nameOverlay.font = text.font
+        nameOverlay.textColor = text.textColor
+        nameOverlay.stringValue = text.stringValue
+        // Same y and height as the real text so the name sits on exactly the
+        // same line; only a little horizontal padding for the border.
+        nameOverlay.frame = NSRect(x: frame.minX - 3, y: frame.minY,
+                                   width: needed + 8, height: frame.height)
+        nameOverlay.isHidden = false
+        addSubview(nameOverlay)   // last subview: draws over the row
+    }
+
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok { onFocus?() }
