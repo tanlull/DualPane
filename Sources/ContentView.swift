@@ -376,6 +376,10 @@ struct ContentView: View {
     @State private var transferStatus: String?
     @State private var transferProgress: TransferProgress?
     @State private var transferFraction: Double?
+    @State private var transferTitle = ""
+    // The dialog appears only if the transfer is still running after a moment,
+    // so a quick copy doesn't flash a sheet on screen and vanish.
+    @State private var showTransferSheet = false
     @State private var pendingConflict: TransferRequest?
     @Environment(\.openWindow) private var openWindow
 
@@ -474,6 +478,9 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Items will be moved to the Trash.")
+        }
+        .sheet(isPresented: $showTransferSheet) {
+            transferSheet
         }
         .sheet(isPresented: $newItemPrompt) {
             namePrompt(title: newItemIsFile ? "New File" : "New Folder", text: $newItemName, confirm: "Create") {
@@ -771,6 +778,52 @@ struct ContentView: View {
         .background(.bar)
     }
 
+    private var transferSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: transferTitle.hasPrefix("Moving")
+                      ? "arrow.right.doc.on.clipboard" : "doc.on.doc")
+                    .foregroundStyle(Color.accentColor)
+                Text(transferTitle)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Group {
+                if let fraction = transferFraction {
+                    ProgressView(value: fraction)
+                        .animation(.linear(duration: 0.2), value: fraction)
+                } else {
+                    ProgressView()   // no total known yet: keep it moving
+                }
+            }
+            .progressViewStyle(.linear)
+            HStack(alignment: .top) {
+                Text(transferStatus ?? "Working…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let fraction = transferFraction {
+                    Text("\(Int(fraction * 100))%")
+                        .font(.callout)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(height: 34, alignment: .top)
+            HStack {
+                Spacer()
+                Button("Stop") { transferProgress?.cancel() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .interactiveDismissDisabled()
+    }
+
     private func namePrompt(title: String, text: Binding<String>, confirm: String, action: @escaping () -> Void) -> some View {
         VStack(spacing: 16) {
             Text(title).font(.headline)
@@ -819,6 +872,11 @@ struct ContentView: View {
         transferStatus = request.move ? "Moving…" : "Copying…"
         let resolveDestination = uniqueDestination
         let total = request.sources.count
+        transferTitle = "\(request.move ? "Moving" : "Copying") \(total == 1 ? "“\(request.sources[0].lastPathComponent)”" : "\(total) items") to “\(request.destDir.lastPathComponent)”"
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if transferBusy { showTransferSheet = true }
+        }
 
         // Progress arrives from the background task, so hop to the main actor
         // to publish it. The same object carries the Cancel button's flag back.
@@ -945,6 +1003,7 @@ struct ContentView: View {
                 transferStatus = nil
                 transferProgress = nil
                 transferFraction = nil
+                showTransferSheet = false
                 // Cancelling is a choice, not an error — say what survived instead.
                 if wasCancelled && failureResult == nil {
                     let kept = copied.count

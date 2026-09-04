@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.10"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.11"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.11", date: "4 Sep 2026", changes: [
+            "Copying and moving now show a proper progress dialog — what is being copied, where to, a progress bar with a percentage, and a Stop button — instead of only a line in the status bar",
+            "The dialog waits half a second before appearing, so quick copies still finish without a window flashing on screen",
+            "Esc stops the transfer; the status bar keeps showing progress as well",
+        ]),
         Release(version: "3.10", date: "4 Sep 2026", changes: [
             "Transfers now show a real progress bar with a percentage, not just a spinner: it fills as the folder is checked, as online-only files come down from iCloud, and as files are copied",
             "The iCloud download bar tracks megabytes, so it moves at the speed the data actually arrives",
