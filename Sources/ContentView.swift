@@ -21,11 +21,20 @@ fileprivate func dpIsSameItem(_ a: URL, _ b: URL) -> Bool {
          == b.resolvingSymlinksInPath().standardizedFileURL.path
 }
 
+// A transfer that could not be completed safely.
+struct TransferError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 // Online-only iCloud items must be downloaded before they're copied, otherwise
 // the copy is silently incomplete (you get an empty placeholder, not the data).
-// Best-effort: trigger the download and wait, with a bounded timeout so a huge
-// or stalled item can never hang the operation.
-fileprivate func dpMaterialize(_ url: URL, fm: FileManager) {
+// This *throws* when it can't finish: a partial materialize must abort the
+// transfer, never fall through and copy 0-byte placeholders — and for a move
+// that means the source is still untouched when we give up.
+fileprivate func dpMaterialize(_ url: URL, fm: FileManager,
+                               timeout: TimeInterval = 600,
+                               report: ((String) -> Void)? = nil) throws {
     let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
 
     // Fast path: only iCloud (ubiquitous) items can need materializing, and
@@ -50,13 +59,30 @@ fileprivate func dpMaterialize(_ url: URL, fm: FileManager) {
     if let e = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
         for case let child as URL in e { consider(child) }
     }
-    let deadline = Date().addingTimeInterval(60)
-    for u in pending where Date() < deadline {
-        while Date() < deadline {
+    guard !pending.isEmpty else { return }
+
+    let name = url.lastPathComponent
+    let total = pending.count
+    let deadline = Date().addingTimeInterval(timeout)
+    var done = 0
+    for u in pending {
+        report?("Downloading “\(name)” from iCloud — \(done + 1) of \(total)…")
+        while true {
             let status = (try? u.resourceValues(forKeys: keys))?.ubiquitousItemDownloadingStatus
             if status == .current { break }
+            if Date() >= deadline {
+                // Out of time with data still in the cloud. Report exactly what
+                // is missing instead of copying an incomplete item.
+                let remaining = total - done
+                throw TransferError(message: """
+                    “\(name)” was not copied: \(remaining) of \(total) item\(remaining == 1 ? " is" : "s are") \
+                    still downloading from iCloud (first: “\(u.lastPathComponent)”). \
+                    Wait for iCloud to finish downloading it, then try again.
+                    """)
+            }
             Thread.sleep(forTimeInterval: 0.2)
         }
+        done += 1
     }
 }
 
@@ -91,6 +117,10 @@ struct ContentView: View {
     @State private var liveSplitFraction: Double? // transient value while dragging, to avoid AppStorage churn per-pixel
     @State private var splitDragBase: CGFloat? // left width when a drag began
     @State private var transferring: Side?
+    // True for the whole duration of *any* transfer (toolbar, ⌘D/⌘M, paste,
+    // drag & drop), not just the centre arrow buttons.
+    @State private var transferBusy = false
+    @State private var transferStatus: String?
     @State private var pendingConflict: TransferRequest?
     @Environment(\.openWindow) private var openWindow
 
@@ -287,8 +317,10 @@ struct ContentView: View {
         HStack(spacing: 12) {
             toolButton("doc.on.doc", "Copy", help: "Copy selection to other pane (⌘D)") { transfer(move: false) }
                 .keyboardShortcut("d")
+                .disabled(transferBusy)
             toolButton("arrow.right.doc.on.clipboard", "Move", help: "Move selection to other pane (⌘M)") { transfer(move: true) }
                 .keyboardShortcut("m")
+                .disabled(transferBusy)
             Divider().frame(height: 22)
             toolButton("folder.badge.plus", "New Folder", help: "Create folder in active pane (⌘N)") {
                 presentNewItem(in: activeSide, isFile: false)
@@ -445,13 +477,26 @@ struct ContentView: View {
 
     private var statusBar: some View {
         HStack {
+            if transferBusy {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
+                    .frame(width: 14, height: 14)
+                Text(transferStatus ?? "Working…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.primary)
+            } else {
             Text(leftPane.statusText)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Divider().frame(height: 14)
             Text(rightPane.statusText)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .font(.caption)
+        .animation(.default, value: transferBusy)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
@@ -500,18 +545,35 @@ struct ContentView: View {
     }
 
     private func runTransfer(_ request: TransferRequest, choice: ConflictChoice) {
+        guard !transferBusy else { return }
         if let side = request.side { transferring = side }
+        transferBusy = true
+        transferStatus = request.move ? "Moving…" : "Copying…"
         let resolveDestination = uniqueDestination
+        let total = request.sources.count
+
+        // Progress updates come from the background task, so hop to the main
+        // actor to publish them.
+        let report: @Sendable (String) -> Void = { text in
+            Task { @MainActor in transferStatus = text }
+        }
 
         Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
             var results: [(src: URL, dst: URL)] = []
-            var failure: String?
+            // Every failure is kept, not just the last one.
+            var failures: [String] = []
             let started = Date()
-            for url in request.sources {
+            for (index, url) in request.sources.enumerated() {
+                let name = url.lastPathComponent
+                let counter = total > 1 ? " (\(index + 1) of \(total))" : ""
                 do {
-                    // Download online-only iCloud contents first so the copy is complete.
-                    dpMaterialize(url, fm: fm)
+                    // Download online-only iCloud contents first so the copy is
+                    // complete. This throws rather than silently proceeding, so a
+                    // half-downloaded folder can never be copied as placeholders —
+                    // and on a move the source is still intact when it does.
+                    try dpMaterialize(url, fm: fm) { report($0 + counter) }
+                    report("\(request.move ? "Moving" : "Copying") “\(name)”…" + counter)
 
                     let plain = request.destDir.appendingPathComponent(url.lastPathComponent)
                     let destExists = fm.fileExists(atPath: plain.path)
@@ -564,7 +626,7 @@ struct ContentView: View {
                         results.append((src: url, dst: target))
                     }
                 } catch {
-                    failure = error.localizedDescription
+                    failures.append("“\(name)”: \(error.localizedDescription)")
                 }
             }
             if request.side != nil {
@@ -575,9 +637,11 @@ struct ContentView: View {
                 }
             }
             let copied = results
-            let failureResult = failure
+            let failureResult = failures.isEmpty ? nil : failures.joined(separator: "\n\n")
             await MainActor.run {
                 transferring = nil
+                transferBusy = false
+                transferStatus = nil
                 errorMessage = failureResult
                 if !copied.isEmpty {
                     UndoStore.shared.record(.transfer(move: request.move, pairs: copied))
@@ -647,7 +711,7 @@ struct ContentView: View {
 
     private func copyBetween(from source: PaneModel, to dest: PaneModel, side: Side) {
         let sources = source.selectedItems.map(\.url)
-        guard !sources.isEmpty, transferring == nil else { return }
+        guard !sources.isEmpty, !transferBusy else { return }
         submitTransfer(TransferRequest(
             sources: sources, destDir: dest.directory, move: false,
             touchDates: true, highlightIn: dest, side: side))

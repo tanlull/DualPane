@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.6"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.7"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,12 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.7", date: "4 Sep 2026", changes: [
+            "Copy and Move (and paste, and drag & drop) now show a progress spinner and what they are working on in the status bar — before, only the ← / → arrow buttons did",
+            "Copying from an iCloud folder (Desktop and Documents are iCloud folders) no longer copies half-empty placeholder files when a download does not finish in time: the transfer stops and tells you what is still downloading, leaving the original untouched",
+            "iCloud downloads now get 10 minutes instead of 1 before giving up, and show which file they are waiting for",
+            "When several items fail, the error now lists all of them instead of just the last one",
+        ]),
         Release(version: "3.6", date: "3 Sep 2026", changes: [
             "The toolbar filter now applies to the pane you are working in, not both at once",
             "Each pane remembers its own filter: click the other pane and the box shows that pane's filter",
