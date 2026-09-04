@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.12"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.13"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,9 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.13", date: "4 Sep 2026", changes: [
+            "“Get Info” moved to the bottom of the right-click menu, so the items you use most stay at the top",
+        ]),
         Release(version: "3.12", date: "4 Sep 2026", changes: [
             "Folders now show their real size in the Size column instead of a dash — measured in the background, so the pane stays responsive and sizes fill in as they are worked out",
             "Sizes are remembered, so going back to a folder shows them instantly; they are re-measured when the folder changes",

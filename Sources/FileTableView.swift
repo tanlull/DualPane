@@ -496,8 +496,6 @@ struct FileTableView: NSViewRepresentable {
             let menu = NSMenu()
             menu.delegate = self
             menu.autoenablesItems = false
-            menu.addItem(makeMenuItem("Get Info", #selector(menuGetInfo), key: "i"))
-            menu.addItem(.separator())
             menu.addItem(makeMenuItem("Open", #selector(menuOpen)))
             menu.addItem(makeMenuItem("Reveal in Finder", #selector(menuReveal)))
             menu.addItem(makeMenuItem("Open in Terminal", #selector(menuTerminal)))
@@ -516,6 +514,8 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Delete", #selector(menuDelete)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("Refresh", #selector(menuRefresh)))
+            menu.addItem(.separator())
+            menu.addItem(makeMenuItem("Get Info", #selector(menuGetInfo), key: "i"))
             return menu
         }
 
