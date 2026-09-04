@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.9"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.10"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.10", date: "4 Sep 2026", changes: [
+            "Transfers now show a real progress bar with a percentage, not just a spinner: it fills as the folder is checked, as online-only files come down from iCloud, and as files are copied",
+            "The iCloud download bar tracks megabytes, so it moves at the speed the data actually arrives",
+            "The spinner is still used for the few cases where no total is known yet",
+        ]),
         Release(version: "3.9", date: "4 Sep 2026", changes: [
             "One slow file from iCloud no longer cancels the whole copy: DualPane keeps fetching everything else and only gives up when nothing at all has arrived for two minutes",
             "The status line now says how many files are still waiting on iCloud while the rest come down",

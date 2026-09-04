@@ -39,16 +39,18 @@ final class TransferProgress: @unchecked Sendable {
     private var cancelled = false
     private var lastPost = Date.distantPast
     private var lastText = ""
-    private let sink: @Sendable (String) -> Void
+    private let sink: @Sendable (String, Double?) -> Void
 
-    init(sink: @escaping @Sendable (String) -> Void) { self.sink = sink }
+    init(sink: @escaping @Sendable (String, Double?) -> Void) { self.sink = sink }
 
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
     func checkCancelled() throws { if isCancelled { throw TransferError.cancelled } }
 
     // Rate-limited: a 40,000-file folder must not post 40,000 UI updates.
-    func post(_ text: String, force: Bool = false) {
+    // `fraction` drives the progress bar; nil means "no total known yet", which
+    // shows the indeterminate spinner instead.
+    func post(_ text: String, fraction: Double? = nil, force: Bool = false) {
         lock.lock()
         let now = Date()
         // Also skip repeats: polling a slow download would otherwise post the
@@ -56,7 +58,7 @@ final class TransferProgress: @unchecked Sendable {
         let due = force || (now.timeIntervalSince(lastPost) > 0.15 && text != lastText)
         if due { lastPost = now; lastText = text }
         lock.unlock()
-        if due { sink(text) }
+        if due { sink(text, fraction) }
     }
 }
 
@@ -88,7 +90,8 @@ fileprivate final class DPCopyReporter: NSObject, FileManagerDelegate {
         if progress.isCancelled { return false }
         copied += 1
         if expected > 0 {
-            progress.post("Copying “\(name)” — \(copied) of \(expected) items…")
+            progress.post("Copying “\(name)” — \(copied) of \(expected) items…",
+                          fraction: min(Double(copied) / Double(expected), 1))
         } else {
             progress.post("Copying “\(name)” — \(copied) items…")
         }
@@ -238,11 +241,30 @@ fileprivate func dpFetchAll(_ pending: [URL], sizes: [Int], label name: String, 
             throw stalled(now)
         }
         let slow = now.slow > 0 ? " (\(now.slow) still waiting on iCloud)" : ""
-        progress.post("Downloading “\(name)” from iCloud — \(now.done) of \(total) files (\(dpBytes(now.bytes)) of \(totalBytes))…\(slow)")
+        let fraction = pendingBytes > 0 ? Double(now.bytes) / Double(pendingBytes)
+                                        : Double(now.done) / Double(total)
+        progress.post("Downloading “\(name)” from iCloud — \(now.done) of \(total) files (\(dpBytes(now.bytes)) of \(totalBytes))…\(slow)",
+                      fraction: min(fraction, 1))
     }
     let outcome = state.snapshot
     // Anything that never arrived means the copy would be incomplete: refuse.
     if outcome.slow > 0 || outcome.done < total { throw stalled(outcome) }
+}
+
+// How many items a folder holds, for the copy progress bar. Bounded by a time
+// budget: on a huge tree, an exact total is not worth making the user wait for,
+// so we fall back to the indeterminate spinner instead.
+fileprivate func dpCountItems(_ url: URL, fm: FileManager, budget: TimeInterval = 1.5) -> Int {
+    guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { return 1 }
+    guard let e = fm.enumerator(at: url, includingPropertiesForKeys: nil,
+                                options: [.skipsPackageDescendants]) else { return 0 }
+    let deadline = Date().addingTimeInterval(budget)
+    var count = 1
+    for case _ as URL in e {
+        count += 1
+        if count % 500 == 0 && Date() > deadline { return 0 }
+    }
+    return count
 }
 
 // Online-only iCloud items must be materialized before they're copied,
@@ -291,6 +313,10 @@ fileprivate func dpMaterialize(_ url: URL, fm: FileManager, progress: TransferPr
         }
     }
 
+    // Counting first is cheap (well under a second even for 40,000 items) and
+    // it turns the slow part — reading each item's iCloud status — into a real
+    // progress bar rather than an endless spinner.
+    let expected = dpCountItems(url, fm: fm)
     progress.post("Checking “\(name)” for online-only files…", force: true)
     consider(url)
     if let e = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
@@ -298,7 +324,8 @@ fileprivate func dpMaterialize(_ url: URL, fm: FileManager, progress: TransferPr
             scanned += 1
             if scanned % 200 == 0 {
                 try progress.checkCancelled()
-                progress.post("Checking “\(name)” for online-only files — \(scanned) items…")
+                progress.post("Checking “\(name)” for online-only files — \(scanned) of \(expected > 0 ? "\(expected)" : "?") items…",
+                              fraction: expected > 0 ? min(Double(scanned) / Double(expected), 1) : nil)
             }
             consider(child)
         }
@@ -348,6 +375,7 @@ struct ContentView: View {
     @State private var transferBusy = false
     @State private var transferStatus: String?
     @State private var transferProgress: TransferProgress?
+    @State private var transferFraction: Double?
     @State private var pendingConflict: TransferRequest?
     @Environment(\.openWindow) private var openWindow
 
@@ -705,10 +733,20 @@ struct ContentView: View {
     private var statusBar: some View {
         HStack {
             if transferBusy {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.7)
-                    .frame(width: 14, height: 14)
+                if let fraction = transferFraction {
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                        .frame(width: 110)
+                        .animation(.linear(duration: 0.2), value: fraction)
+                    Text("\(Int(fraction * 100))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                        .frame(width: 14, height: 14)
+                }
                 Text(transferStatus ?? "Working…")
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -784,8 +822,11 @@ struct ContentView: View {
 
         // Progress arrives from the background task, so hop to the main actor
         // to publish it. The same object carries the Cancel button's flag back.
-        let progress = TransferProgress { text in
-            Task { @MainActor in transferStatus = text }
+        let progress = TransferProgress { text, fraction in
+            Task { @MainActor in
+                transferStatus = text
+                transferFraction = fraction
+            }
         }
         transferProgress = progress
 
@@ -811,7 +852,8 @@ struct ContentView: View {
                     let itemCount = try dpMaterialize(url, fm: fm, progress: progress)
 
                     let reporter = DPCopyReporter(progress: progress, name: name,
-                                                  expected: itemCount)
+                                                  expected: itemCount > 0 ? itemCount
+                                                                          : dpCountItems(url, fm: fm))
                     fm.delegate = request.move ? nil : reporter
                     progress.post("\(request.move ? "Moving" : "Copying") “\(name)”…\(counter)", force: true)
                     defer { fm.delegate = nil }
@@ -902,6 +944,7 @@ struct ContentView: View {
                 transferBusy = false
                 transferStatus = nil
                 transferProgress = nil
+                transferFraction = nil
                 // Cancelling is a choice, not an error — say what survived instead.
                 if wasCancelled && failureResult == nil {
                     let kept = copied.count
