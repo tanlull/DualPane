@@ -413,6 +413,7 @@ struct ContentView: View {
                     model: leftPane,
                     tabs: leftTabs,
                     favorites: favorites,
+                    otherDirectory: { rightPane.directory },
                     paneID: "leftPane",
                     isActive: activeSide == .left,
                     showTagColors: showTagColors,
@@ -434,6 +435,7 @@ struct ContentView: View {
                     model: rightPane,
                     tabs: rightTabs,
                     favorites: favorites,
+                    otherDirectory: { leftPane.directory },
                     paneID: "rightPane",
                     isActive: activeSide == .right,
                     showTagColors: showTagColors,
@@ -1278,6 +1280,8 @@ struct PaneView: View {
     @ObservedObject var model: PaneModel
     @ObservedObject var tabs: PaneTabsModel
     @ObservedObject var favorites: FavoritesStore
+    /// The folder shown by the other pane, for "same folder as opposite pane".
+    let otherDirectory: () -> URL
     /// Stable identifier ("leftPane"/"rightPane") for remembering column layout.
     let paneID: String
     let isActive: Bool
@@ -1565,7 +1569,43 @@ struct PaneView: View {
             onActivate()
             tabs.select(index)
         }
+        .contextMenu { tabMenu(tab: tab, index: index) }
         .help(tab.directory.path)
+    }
+
+    /// Right-click menu on a tab: jump this tab somewhere useful without
+    /// leaving the tab strip.
+    @ViewBuilder
+    private func tabMenu(tab: PaneModel, index: Int) -> some View {
+        Button("Same Folder as Other Pane") {
+            onActivate()
+            tabs.select(index)
+            tab.navigate(to: otherDirectory())
+        }
+        Divider()
+        Menu("Go to Tag Color") {
+            ForEach(ContentView.tagOptions, id: \.number) { option in
+                Button {
+                    onActivate()
+                    tabs.select(index)
+                    tab.tagFilter = option.number
+                } label: {
+                    Label {
+                        Text(option.name)
+                    } icon: {
+                        Image(nsImage: ContentView.tagSwatch(option.color))
+                    }
+                }
+            }
+            if tab.tagFilter != nil {
+                Divider()
+                Button("Clear Tag Filter") { tab.tagFilter = nil }
+            }
+        }
+        Divider()
+        Button(favorites.contains(tab.directory) ? "Remove from Favorites" : "Add to Favorites") {
+            favorites.toggle(tab.directory)
+        }
     }
 
     private var pathBar: some View {

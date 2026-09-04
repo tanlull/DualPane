@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.14"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.15"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.15", date: "5 Sep 2026", changes: [
+            "Renaming is much easier to edit in: the name now becomes a real, visible text box that fills the Name column, so you can press and drag anywhere in it to select part of the name",
+            "A drag that starts near the name while renaming no longer begins a file drag and cancels the rename",
+            "Right-click a tab for a small menu: go to the same folder as the other pane, jump to a tag colour, or add the tab's folder to favourites",
+        ]),
         Release(version: "3.14", date: "4 Sep 2026", changes: [
             "Hovering a file whose name is too long for the Name column now shows the full name straight away, continuing on the same line past the column edge; names that already fit are left alone",
         ]),

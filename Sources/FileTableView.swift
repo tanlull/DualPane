@@ -236,6 +236,14 @@ struct FileTableView: NSViewRepresentable {
                 dot.translatesAutoresizingMaskIntoConstraints = false
                 cell.addSubview(dot)
                 text.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+                // A low-priority "fill the column" constraint. Normally the
+                // hugging priority wins and the label is only as wide as its
+                // text; while renaming we drop hugging below this so the edit
+                // box stretches across the column and is easy to click into
+                // and drag-select in.
+                let stretch = text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -16)
+                stretch.priority = .defaultLow
+                stretch.isActive = true
                 NSLayoutConstraint.activate([
                     image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
                     image.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
@@ -292,10 +300,38 @@ struct FileTableView: NSViewRepresentable {
         /// Make just this row's name field editable, then start editing it.
         func beginEditing(table: NSTableView, row: Int) {
             let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView
-            cell?.textField?.isEditable = true
-            cell?.textField?.isSelectable = true
+            guard let field = cell?.textField else { return }
+            field.isEditable = true
+            field.isSelectable = true
+            // Give the name a real, visible edit box for the duration of the
+            // rename: bordered, opaque, and stretched across the column. As a
+            // bare label the editable area was only as wide as the text and
+            // invisible, so a press that started a pixel off the glyphs hit the
+            // table instead — which began a row drag and ended the rename
+            // rather than selecting text.
+            field.isBordered = true
+            field.isBezeled = true
+            field.bezelStyle = .squareBezel
+            field.drawsBackground = true
+            field.backgroundColor = .textBackgroundColor
+            field.focusRingType = .default
+            field.lineBreakMode = .byClipping
+            field.setContentHuggingPriority(.init(1), for: .horizontal)
             table.editColumn(0, row: row, with: nil, select: true)
-            selectBaseName(of: cell?.textField, in: table)
+            selectBaseName(of: field, in: table)
+        }
+
+        /// Undo everything `beginEditing` turned on, so the cell goes back to
+        /// being a plain label that lets clicks through to the row.
+        private func endEditingAppearance(_ field: NSTextField) {
+            field.isEditable = false
+            field.isSelectable = false
+            field.isBordered = false
+            field.isBezeled = false
+            field.drawsBackground = false
+            field.focusRingType = .none
+            field.lineBreakMode = .byTruncatingTail
+            field.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         }
 
         /// Finder behaviour: pre-select only the part of the name before the
@@ -321,8 +357,7 @@ struct FileTableView: NSViewRepresentable {
             MainActor.assumeIsolated { parent.model.isRenaming = false }
             guard let field = obj.object as? NSTextField, let table = tableView else { return }
             // Lock the field again so it stops intercepting row clicks.
-            field.isEditable = false
-            field.isSelectable = false
+            endEditingAppearance(field)
             let row = table.row(for: field)
             guard row >= 0, row < items.count else { return }
             let item = items[row]
@@ -362,6 +397,9 @@ struct FileTableView: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
             guard row < items.count else { return nil }
+            // While a name is being edited, a drag near the edit box must not
+            // start a file drag — that would end the rename mid-selection.
+            if MainActor.assumeIsolated({ parent.model.isRenaming }) { return nil }
             return items[row].url as NSURL
         }
 
