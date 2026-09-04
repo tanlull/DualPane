@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.11"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.12"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,12 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.12", date: "4 Sep 2026", changes: [
+            "Folders now show their real size in the Size column instead of a dash — measured in the background, so the pane stays responsive and sizes fill in as they are worked out",
+            "Sizes are remembered, so going back to a folder shows them instantly; they are re-measured when the folder changes",
+            "Turn it off with “Calculate Folder Sizes” in the menu you get by right-clicking a column header",
+            "New “Get Info” in the right-click menu (and ⌘I): kind, full path, size in bytes, what a folder contains, created and modified dates, tags, and permissions",
+        ]),
         Release(version: "3.11", date: "4 Sep 2026", changes: [
             "Copying and moving now show a proper progress dialog — what is being copied, where to, a progress bar with a percentage, and a Stop button — instead of only a line in the status bar",
             "The dialog waits half a second before appearing, so quick copies still finish without a window flashing on screen",

@@ -44,6 +44,11 @@ struct AppCommands: Commands {
         // File > Move to Trash (⌘⌫), same shortcut as Finder.
         CommandGroup(after: .newItem) {
             Divider()
+            Button("Get Info") {
+                actions.infoRequested?()
+            }
+            .keyboardShortcut("i", modifiers: .command)
+            .disabled(!actions.canDelete)
             Button("Move to Trash") {
                 actions.deleteRequested?()
             }

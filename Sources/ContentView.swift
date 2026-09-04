@@ -380,6 +380,7 @@ struct ContentView: View {
     // The dialog appears only if the transfer is still running after a moment,
     // so a quick copy doesn't flash a sheet on screen and vanish.
     @State private var showTransferSheet = false
+    @State private var infoTargets: [URL] = []
     @State private var pendingConflict: TransferRequest?
     @Environment(\.openWindow) private var openWindow
 
@@ -423,6 +424,7 @@ struct ContentView: View {
                     onCopyItems: { copyProviders(from: leftPane, cut: $0) },
                     onPasteItems: { paste($0, into: leftPane) },
                     onDelete: { requestDelete(side: .left) },
+                    onGetInfo: { infoTargets = $0 },
                     onNewFolder: { presentNewItem(in: .left, isFile: false) },
                     onNewFile: { presentNewItem(in: .left, isFile: true) }
                 )
@@ -443,6 +445,7 @@ struct ContentView: View {
                     onCopyItems: { copyProviders(from: rightPane, cut: $0) },
                     onPasteItems: { paste($0, into: rightPane) },
                     onDelete: { requestDelete(side: .right) },
+                    onGetInfo: { infoTargets = $0 },
                     onNewFolder: { presentNewItem(in: .right, isFile: false) },
                     onNewFile: { presentNewItem(in: .right, isFile: true) }
                 )
@@ -479,6 +482,10 @@ struct ContentView: View {
         } message: {
             Text("Items will be moved to the Trash.")
         }
+        .sheet(isPresented: Binding(get: { !infoTargets.isEmpty },
+                                    set: { if !$0 { infoTargets = [] } })) {
+            InfoView(urls: infoTargets) { infoTargets = [] }
+        }
         .sheet(isPresented: $showTransferSheet) {
             transferSheet
         }
@@ -495,6 +502,7 @@ struct ContentView: View {
         }
         .onAppear {
             AppActions.shared.deleteRequested = { confirmDelete = true }
+            AppActions.shared.infoRequested = { infoTargets = active.selectedItems.map(\.url) }
             AppActions.shared.selectionCount = active.selection.count
             UndoStore.shared.onDidUndo = {
                 leftPane.reload()
@@ -1004,6 +1012,7 @@ struct ContentView: View {
                 transferProgress = nil
                 transferFraction = nil
                 showTransferSheet = false
+                FolderSizeCache.shared.invalidateAll()
                 // Cancelling is a choice, not an error — say what survived instead.
                 if wasCancelled && failureResult == nil {
                     let kept = copied.count
@@ -1281,6 +1290,7 @@ struct PaneView: View {
     let onCopyItems: (Bool) -> [NSItemProvider]
     let onPasteItems: ([NSItemProvider]) -> Void
     let onDelete: () -> Void
+    let onGetInfo: ([URL]) -> Void
     let onNewFolder: () -> Void
     let onNewFile: () -> Void
 
@@ -1306,6 +1316,7 @@ struct PaneView: View {
                 onRename: onRename,
                 onCommitRename: onCommitRename,
                 onDelete: onDelete,
+                onGetInfo: onGetInfo,
                 onDrop: onDropFiles,
                 onDropInto: onDropInto,
                 onNewFolder: onNewFolder,

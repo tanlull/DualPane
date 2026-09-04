@@ -45,11 +45,80 @@ enum IconProvider {
     }
 }
 
+// Folder sizes are not something the file system knows: they have to be
+// measured by walking the tree. That is fast (36,000 files in ~0.7s) but not
+// free, so results are cached per folder and only recomputed when the folder
+// itself changes. Measuring happens on a serial background queue so a pane
+// full of folders streams its sizes in rather than stalling the UI.
+@MainActor
+final class FolderSizeCache {
+    static let shared = FolderSizeCache()
+
+    private struct Entry { let size: Int64; let measured: Date }
+    private var entries: [String: Entry] = [:]
+    private var waiting: [String: [(Int64) -> Void]] = [:]
+    private let queue = DispatchQueue(label: "dualpane.folder-size", qos: .utility)
+
+    /// A previously measured size, if the folder has not been touched since.
+    func cached(_ url: URL) -> Int64? {
+        guard let entry = entries[url.path] else { return nil }
+        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate
+        if let modified, modified > entry.measured { return nil }
+        return entry.size
+    }
+
+    func measure(_ url: URL, completion: @escaping (Int64) -> Void) {
+        if let size = cached(url) { completion(size); return }
+        let path = url.path
+        // Already being measured: wait for that result rather than starting a
+        // second walk — and rather than dropping this caller, which used to
+        // leave a folder's size blank when the pane re-sorted mid-measurement.
+        if waiting[path] != nil {
+            waiting[path]?.append(completion)
+            return
+        }
+        waiting[path] = [completion]
+        let started = Date()
+        queue.async {
+            let bytes = Self.total(of: url)
+            Task { @MainActor in
+                let callbacks = self.waiting.removeValue(forKey: path) ?? []
+                if bytes >= 0 { self.entries[path] = Entry(size: bytes, measured: started) }
+                for callback in callbacks { callback(bytes) }
+            }
+        }
+    }
+
+    /// After a copy, move or delete, any cached size may be wrong.
+    func invalidateAll() { entries.removeAll() }
+
+    /// Sum of every regular file inside. Returns -1 if the folder is so large
+    /// that measuring it would keep the disk busy for longer than `budget`.
+    nonisolated static func total(of url: URL, budget: TimeInterval = 20) -> Int64 {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey]
+        guard let walker = FileManager.default.enumerator(
+            at: url, includingPropertiesForKeys: Array(keys)) else { return -1 }
+        let deadline = Date().addingTimeInterval(budget)
+        var total: Int64 = 0
+        var seen = 0
+        for case let child as URL in walker {
+            seen += 1
+            if seen % 2000 == 0 && Date() > deadline { return -1 }
+            guard let values = try? child.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else { continue }
+            total += Int64(values.fileSize ?? 0)
+        }
+        return total
+    }
+}
+
 struct FileItem: Identifiable, Hashable {
     let url: URL
     let name: String
     let isDirectory: Bool
-    let size: Int64
+    /// Bytes. For a folder this is -1 until its size has been measured.
+    var size: Int64
     let modified: Date
     let icon: NSImage
     let tagColors: [NSColor]
@@ -78,7 +147,7 @@ struct FileItem: Identifiable, Hashable {
     ]
 
     var sizeText: String {
-        if isDirectory { return "—" }
+        if size < 0 { return "—" }              // folder not measured (yet)
         return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
     }
 
@@ -129,6 +198,23 @@ final class PaneModel: ObservableObject, Identifiable {
     // starting a rename. The table view consumes it and clears it to nil.
     @Published var revealRequest: URL?
     // Default off (like Finder); remembered across launches, shared by both panes.
+    /// Measure and show folder sizes in the Size column (Finder leaves these
+    /// blank; here it is on by default because measuring is quick).
+    @Published var showFolderSizes = UserDefaults.standard.object(forKey: "showFolderSizes") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(showFolderSizes, forKey: "showFolderSizes")
+            if showFolderSizes {
+                requestFolderSizes()
+            } else {
+                for index in allItems.indices where allItems[index].isDirectory {
+                    allItems[index].size = -1
+                }
+                applySort()
+            }
+        }
+    }
+    private var folderSizeRefreshScheduled = false
+
     @Published var showHidden = UserDefaults.standard.bool(forKey: "showHiddenFiles") {
         didSet {
             UserDefaults.standard.set(showHidden, forKey: "showHiddenFiles")
@@ -306,7 +392,10 @@ final class PaneModel: ObservableObject, Identifiable {
             url: url,
             name: displayName ?? url.lastPathComponent,
             isDirectory: isDirectory,
-            size: Int64(values?.fileSize ?? 0),
+            // A folder's size is unknown (-1) until measured; a cached
+            // measurement is used straight away so revisiting is instant.
+            size: isDirectory ? (FolderSizeCache.shared.cached(url) ?? -1)
+                              : Int64(values?.fileSize ?? 0),
             modified: values?.contentModificationDate ?? .distantPast,
             icon: IconProvider.icon(for: url, isDirectory: isDirectory,
                                     tintColor: colors.first, tintKey: tagKey),
@@ -358,6 +447,35 @@ final class PaneModel: ObservableObject, Identifiable {
         }
     }
 
+    // Asks for the size of every folder on screen that hasn't got one yet.
+    // Cheap to call repeatedly: measured folders are skipped, and the cache
+    // answers immediately for ones seen before.
+    private func requestFolderSizes() {
+        guard showFolderSizes else { return }
+        for item in items where item.isDirectory && item.size < 0 {
+            let url = item.url
+            FolderSizeCache.shared.measure(url) { [weak self] bytes in
+                guard let self, bytes >= 0 else { return }
+                // Navigated away, or the folder is gone: nothing to update.
+                guard let index = self.allItems.firstIndex(where: { $0.url == url }),
+                      self.allItems[index].size < 0 else { return }
+                self.allItems[index].size = bytes
+                self.scheduleFolderSizeRefresh()
+            }
+        }
+    }
+
+    // Coalesced: a folder of 200 subfolders must not re-sort the pane 200 times.
+    private func scheduleFolderSizeRefresh() {
+        guard !folderSizeRefreshScheduled else { return }
+        folderSizeRefreshScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.folderSizeRefreshScheduled = false
+            self.applySort()
+        }
+    }
+
     private func applySort(previous: [FileItem]? = nil) {
         let query = searchText.trimmingCharacters(in: .whitespaces)
         let visible = query.isEmpty
@@ -372,6 +490,7 @@ final class PaneModel: ObservableObject, Identifiable {
             sorted = visible.sorted(using: sortOrder)
         }
         items = sorted
+        requestFolderSizes()
         // The table view reloads on a revision bump, so only bump when the list
         // really differs — otherwise a watcher event on an unrelated file would
         // redraw the pane for nothing.

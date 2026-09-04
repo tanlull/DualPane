@@ -17,6 +17,7 @@ struct FileTableView: NSViewRepresentable {
     let onRename: () -> Void
     let onCommitRename: (URL, String) -> Void
     let onDelete: () -> Void
+    let onGetInfo: ([URL]) -> Void
     let onDrop: ([URL]) -> Bool
     let onDropInto: ([URL], URL, Bool) -> Bool // urls, destination folder, move
     let onNewFolder: () -> Void
@@ -468,6 +469,12 @@ struct FileTableView: NSViewRepresentable {
                 item.representedObject = column.id
                 menu.addItem(item)
             }
+            menu.addItem(.separator())
+            let sizes = NSMenuItem(title: "Calculate Folder Sizes",
+                                   action: #selector(toggleFolderSizes), keyEquivalent: "")
+            sizes.target = self
+            sizes.representedObject = "folderSizes"
+            menu.addItem(sizes)
             headerMenu = menu
             return menu
         }
@@ -489,6 +496,8 @@ struct FileTableView: NSViewRepresentable {
             let menu = NSMenu()
             menu.delegate = self
             menu.autoenablesItems = false
+            menu.addItem(makeMenuItem("Get Info", #selector(menuGetInfo), key: "i"))
+            menu.addItem(.separator())
             menu.addItem(makeMenuItem("Open", #selector(menuOpen)))
             menu.addItem(makeMenuItem("Reveal in Finder", #selector(menuReveal)))
             menu.addItem(makeMenuItem("Open in Terminal", #selector(menuTerminal)))
@@ -510,18 +519,34 @@ struct FileTableView: NSViewRepresentable {
             return menu
         }
 
-        private func makeMenuItem(_ title: String, _ action: Selector) -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        private func makeMenuItem(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
             item.target = self
             return item
+        }
+
+        @objc private func menuGetInfo() {
+            guard let table = tableView else { return }
+            let urls = table.selectedRowIndexes.compactMap { $0 < items.count ? items[$0].url : nil }
+            guard !urls.isEmpty else { return }
+            parent.onGetInfo(urls)
+        }
+
+        @objc private func toggleFolderSizes() {
+            let model = parent.model
+            Task { @MainActor in model.showFolderSizes.toggle() }
         }
 
         func menuNeedsUpdate(_ menu: NSMenu) {
             guard let table = tableView else { return }
             if menu === headerMenu {
                 for item in menu.items {
-                    guard let id = item.representedObject as? String,
-                          let column = table.tableColumn(withIdentifier: .init(id)) else { continue }
+                    guard let id = item.representedObject as? String else { continue }
+                    if id == "folderSizes" {
+                        item.state = parent.model.showFolderSizes ? .on : .off
+                        continue
+                    }
+                    guard let column = table.tableColumn(withIdentifier: .init(id)) else { continue }
                     item.state = column.isHidden ? .off : .on
                 }
                 return
@@ -535,7 +560,7 @@ struct FileTableView: NSViewRepresentable {
             for item in menu.items {
                 switch item.action {
                 case #selector(menuOpen), #selector(menuReveal), #selector(menuCopy),
-                     #selector(menuCut), #selector(menuDelete):
+                     #selector(menuCut), #selector(menuDelete), #selector(menuGetInfo):
                     item.isEnabled = hasSelection
                 case #selector(menuRename):
                     item.isEnabled = table.selectedRowIndexes.count == 1

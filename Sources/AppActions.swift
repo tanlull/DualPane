@@ -22,6 +22,9 @@ final class AppActions: ObservableObject {
     /// Asks ContentView to present the delete confirmation.
     var deleteRequested: (() -> Void)?
 
+    /// Asks ContentView to open Get Info for the active pane's selection (⌘I).
+    var infoRequested: (() -> Void)?
+
     /// Set to true to move keyboard focus into the toolbar's filter field (⌘F).
     /// ContentView consumes it and sets it back to false.
     @Published var focusFilterRequest = false
