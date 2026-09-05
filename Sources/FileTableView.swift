@@ -572,7 +572,7 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(.separator())
             // Only meaningful inside a cloud provider; hidden elsewhere by
             // menuNeedsUpdate, along with its separator.
-            let pin = makeMenuItem("Keep on This Device (Download Now)", #selector(menuTogglePin))
+            let pin = makeMenuItem("Download Now (Store on This Mac)", #selector(menuTogglePin))
             menu.addItem(pin)
             pinSeparator = .separator()
             menu.addItem(pinSeparator!)
@@ -985,7 +985,7 @@ final class CloudBadgeView: NSImageView {
                                 accessibilityDescription: "Downloaded")
                 contentTintColor = .systemGreen
                 isHidden = false
-                toolTip = "Kept on this device"
+                toolTip = "Downloaded — the contents are on this Mac now.\nThis is not OneDrive's Always Keep on This Device pin, which only OneDrive itself can set."
             }
         }
     }

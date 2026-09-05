@@ -5,10 +5,12 @@ import Foundation
 /// Documents) so they are present on this Mac.
 ///
 /// Note on Finder's "Always Keep on This Device": that checkbox sets the File
-/// Provider *download policy*, which a third-party app cannot set on this
-/// macOS SDK — it belongs to the provider's own Finder extension. What we can
-/// do, and what this does, is materialize the items now: the provider fetches
-/// the contents and leaves a real local copy behind.
+/// Provider *download policy*. No SDK on this machine (up to macOS 26.5)
+/// exposes it — NSFileProviderManager offers only `evictItem`, nothing to set
+/// or read a pin — so no third-party app can set it or report it; it belongs
+/// to the provider's own Finder extension. What we can do, and what this does,
+/// is materialize the items now: the provider fetches the contents and leaves
+/// a real local copy behind. The provider may still evict them again later.
 enum CloudDownload {
 
     /// Cheap, synchronous test used to decide whether to show the menu item —
