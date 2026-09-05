@@ -1198,8 +1198,18 @@ struct ContentView: View {
 
     // Called by the table when in-cell editing commits with a new name.
     private func commitRename(_ url: URL, to newName: String) {
-        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != url.lastPathComponent else { return }
+        // A name is a single path component. Anything with a separator in it
+        // is not a rename — it is a stray path that got into the field (a file
+        // dropped on the editor, a paste) — and appendingPathComponent would
+        // turn it into a move into a folder that does not exist.
+        guard !trimmed.contains("/"), !trimmed.contains(":"), trimmed != ".", trimmed != ".." else {
+            errorMessage = "A name can't contain \"/\" or \":\". The item was not renamed."
+            leftPane.reload()
+            rightPane.reload()
+            return
+        }
         let dest = url.deletingLastPathComponent().appendingPathComponent(trimmed)
         do {
             try FileManager.default.moveItem(at: url, to: dest)

@@ -317,13 +317,18 @@ struct FileTableView: NSViewRepresentable {
             field.focusRingType = .default
             field.lineBreakMode = .byClipping
             field.setContentHuggingPriority(.init(1), for: .horizontal)
+            (table as? PaneTableView)?.isEditingCell = true
             table.editColumn(0, row: row, with: nil, select: true)
+            // A file dragged over the field editor would be inserted as its
+            // path text, silently corrupting the name being typed.
+            (table.window?.fieldEditor(false, for: field) as? NSTextView)?.unregisterDraggedTypes()
             selectBaseName(of: field, in: table)
         }
 
         /// Undo everything `beginEditing` turned on, so the cell goes back to
         /// being a plain label that lets clicks through to the row.
         private func endEditingAppearance(_ field: NSTextField) {
+            (tableView as? PaneTableView)?.isEditingCell = false
             field.isEditable = false
             field.isSelectable = false
             field.isBordered = false
@@ -747,8 +752,17 @@ final class PaneTableView: NSTableView {
     /// too long for the Name column, the full name is drawn immediately, on the
     /// same line and starting at the same x as the truncated text, so it reads
     /// as the name simply continuing past the column edge. No tooltip delay.
+    /// True while a cell is being renamed. The hover overlay must stay away
+    /// during that: as an opaque subview of the table drawn on top of the row,
+    /// it swallowed the press-and-drag meant for the edit box — which is why
+    /// text could not be selected in long names, and why the drag became a
+    /// file drag whose path was then dropped into the name as text.
+    var isEditingCell = false {
+        didSet { if isEditingCell { hideNameOverlay() } }
+    }
+
     private lazy var nameOverlay: NSTextField = {
-        let field = NSTextField(labelWithString: "")
+        let field = OverlayLabel(labelWithString: "")
         field.wantsLayer = true
         field.drawsBackground = false
         field.lineBreakMode = .byClipping
@@ -800,6 +814,7 @@ final class PaneTableView: NSTableView {
     }
 
     private func showNameOverlay(at point: NSPoint) {
+        guard !isEditingCell else { hideNameOverlay(); return }
         let column = column(withIdentifier: .init("name"))
         let row = self.row(at: point)
         guard column >= 0, row >= 0, row != hoverRow || nameOverlay.isHidden else {
@@ -853,4 +868,10 @@ final class PaneTableView: NSTableView {
             return super.validateUserInterfaceItem(item)
         }
     }
+}
+
+
+/// The hover name overlay is decoration only — it must never take a click.
+private final class OverlayLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
