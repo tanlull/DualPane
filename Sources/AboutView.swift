@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.21"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.22"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,10 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.22", date: "5 Sep 2026", changes: [
+            "The cloud badge on an online-only file is now a button: click it to download just that file, with a pointing-hand cursor over it",
+            "The green check on a downloaded file stays passive, so clicking it still selects the row",
+        ]),
         Release(version: "3.21", date: "5 Sep 2026", changes: [
             "Files in OneDrive, iCloud Drive and other cloud folders now show their status next to the name: a green check when the file is stored on this Mac, a cloud with an arrow when it is still online-only",
             "The badge updates after Keep on This Device (Download Now) finishes",

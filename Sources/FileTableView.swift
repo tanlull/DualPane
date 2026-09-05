@@ -191,6 +191,8 @@ struct FileTableView: NSViewRepresentable {
                 cell.textField?.textColor = .labelColor
                 if let badge = cell.subviews.first(where: { $0 is CloudBadgeView }) as? CloudBadgeView {
                     badge.state = item.cloudState
+                    badge.url = item.url
+                    badge.onClick = { [weak self] url in self?.download([url]) }
                 }
                 if let dot = cell.subviews.first(where: { $0 is TagDotView }) as? TagDotView {
                     // Folders show their first tag via the tinted icon; extra tags
@@ -691,7 +693,11 @@ struct FileTableView: NSViewRepresentable {
         }
 
         @objc func menuTogglePin(_ sender: Any?) {
-            let urls = selectedURLs()
+            download(selectedURLs())
+        }
+
+        /// Fetch online-only items, then reload so their badges catch up.
+        func download(_ urls: [URL]) {
             guard !urls.isEmpty else { return }
             let model = parent.model
             let onError = parent.onError
@@ -950,13 +956,19 @@ private final class OverlayLabel: NSTextField {
 }
 
 
-/// Cloud status next to a name: a filled cloud for an item that is still
-/// online-only, a green check for one whose contents are on this Mac. Ordinary
-/// local files show nothing.
+/// Cloud status next to a name: a cloud with an arrow for an item that is
+/// still online-only, a green check for one whose contents are on this Mac.
+/// Ordinary local files show nothing.
+///
+/// The online-only badge is a button: clicking it downloads just that item.
+/// Every other state is decoration and lets the click through to the row.
 final class CloudBadgeView: NSImageView {
+    var url: URL?
+    var onClick: ((URL) -> Void)?
     var state: FileItem.CloudState = .notCloud {
         didSet {
             guard state != oldValue else { return }
+            window?.invalidateCursorRects(for: self)
             switch state {
             case .notCloud:
                 image = nil
@@ -967,7 +979,7 @@ final class CloudBadgeView: NSImageView {
                                 accessibilityDescription: "Online only")
                 contentTintColor = .secondaryLabelColor
                 isHidden = false
-                toolTip = "Online only — right-click and choose Keep on This Device to download it"
+                toolTip = "Online only — click to download it to this Mac"
             case .local:
                 image = NSImage(systemSymbolName: "checkmark.circle.fill",
                                 accessibilityDescription: "Downloaded")
@@ -986,6 +998,23 @@ final class CloudBadgeView: NSImageView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Decoration only — never take a click meant for the row.
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    /// Only the online-only badge is clickable; in any other state the click
+    /// belongs to the row underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard state == .online else { return nil }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard state == .online, let url else { return }
+        // Show it is working: the row reloads (and the badge turns green) when
+        // the download finishes.
+        contentTintColor = .controlAccentColor
+        onClick?(url)
+    }
+
+    override func resetCursorRects() {
+        guard state == .online else { return }
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
 }
