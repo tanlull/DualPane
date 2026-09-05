@@ -189,6 +189,9 @@ struct FileTableView: NSViewRepresentable {
                 cell.imageView?.image = item.icon
                 cell.textField?.stringValue = item.name
                 cell.textField?.textColor = .labelColor
+                if let badge = cell.subviews.first(where: { $0 is CloudBadgeView }) as? CloudBadgeView {
+                    badge.state = item.cloudState
+                }
                 if let dot = cell.subviews.first(where: { $0 is TagDotView }) as? TagDotView {
                     // Folders show their first tag via the tinted icon; extra tags
                     // appear as dots. Files show all tag colors as dots.
@@ -236,6 +239,9 @@ struct FileTableView: NSViewRepresentable {
                 let dot = TagDotView()
                 dot.translatesAutoresizingMaskIntoConstraints = false
                 cell.addSubview(dot)
+                let badge = CloudBadgeView()
+                badge.translatesAutoresizingMaskIntoConstraints = false
+                cell.addSubview(badge)
                 text.setContentHuggingPriority(.defaultHigh, for: .horizontal)
                 // A low-priority "fill the column" constraint. Normally the
                 // hugging priority wins and the label is only as wide as its
@@ -256,6 +262,10 @@ struct FileTableView: NSViewRepresentable {
                     dot.leadingAnchor.constraint(equalTo: text.trailingAnchor, constant: 5),
                     dot.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
                     dot.heightAnchor.constraint(equalToConstant: 9),
+                    badge.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 4),
+                    badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                    badge.widthAnchor.constraint(equalToConstant: 13),
+                    badge.heightAnchor.constraint(equalToConstant: 13),
                 ])
             } else {
                 if identifier.rawValue == "size" { text.alignment = .right }
@@ -936,5 +946,46 @@ final class PaneTableView: NSTableView {
 
 /// The hover name overlay is decoration only — it must never take a click.
 private final class OverlayLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+
+/// Cloud status next to a name: a filled cloud for an item that is still
+/// online-only, a green check for one whose contents are on this Mac. Ordinary
+/// local files show nothing.
+final class CloudBadgeView: NSImageView {
+    var state: FileItem.CloudState = .notCloud {
+        didSet {
+            guard state != oldValue else { return }
+            switch state {
+            case .notCloud:
+                image = nil
+                isHidden = true
+                toolTip = nil
+            case .online:
+                image = NSImage(systemSymbolName: "icloud.and.arrow.down",
+                                accessibilityDescription: "Online only")
+                contentTintColor = .secondaryLabelColor
+                isHidden = false
+                toolTip = "Online only — right-click and choose Keep on This Device to download it"
+            case .local:
+                image = NSImage(systemSymbolName: "checkmark.circle.fill",
+                                accessibilityDescription: "Downloaded")
+                contentTintColor = .systemGreen
+                isHidden = false
+                toolTip = "Kept on this device"
+            }
+        }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        imageScaling = .scaleProportionallyDown
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Decoration only — never take a click meant for the row.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

@@ -122,6 +122,11 @@ struct FileItem: Identifiable, Hashable {
     let modified: Date
     let icon: NSImage
     let tagColors: [NSColor]
+    /// Whether the item lives in a cloud provider, and if so whether its
+    /// contents are on this Mac or still online-only.
+    let cloudState: CloudState
+
+    enum CloudState { case notCloud, online, local }
 
     var id: URL { url }
 
@@ -338,6 +343,9 @@ final class PaneModel: ObservableObject, Identifiable {
     private static let itemKeys: Set<URLResourceKey> = [
         .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey,
         .labelNumberKey, .tagNamesKey, .isSymbolicLinkKey,
+        // Prefetched with everything else, so the cloud badge costs no extra
+        // stat per row.
+        .fileAllocatedSizeKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey,
     ]
 
     // Finder's "iCloud Drive" is a merged view: app folders (Obsidian, Pages,
@@ -365,6 +373,20 @@ final class PaneModel: ObservableObject, Identifiable {
             result.append(makeItem(url: docs, displayName: name))
         }
         return result
+    }
+
+    /// Cloud items only: `.local` once the contents are on disk, `.online`
+    /// while the file is still a placeholder. iCloud states this directly;
+    /// other File Providers show a non-zero size with no blocks allocated.
+    private static func cloudState(url: URL, isDirectory: Bool,
+                                   values: URLResourceValues?) -> FileItem.CloudState {
+        guard !isDirectory, CloudDownload.isCloudLocation(url) else { return .notCloud }
+        if values?.isUbiquitousItem == true {
+            return values?.ubiquitousItemDownloadingStatus == .current ? .local : .online
+        }
+        let size = values?.fileSize ?? 0
+        let allocated = values?.fileAllocatedSize ?? 0
+        return (size > 0 && allocated == 0) ? .online : .local
     }
 
     private func makeItem(url: URL, displayName: String? = nil) -> FileItem {
@@ -399,7 +421,8 @@ final class PaneModel: ObservableObject, Identifiable {
             modified: values?.contentModificationDate ?? .distantPast,
             icon: IconProvider.icon(for: url, isDirectory: isDirectory,
                                     tintColor: colors.first, tintKey: tagKey),
-            tagColors: colors
+            tagColors: colors,
+            cloudState: Self.cloudState(url: url, isDirectory: isDirectory, values: values)
         )
     }
 
