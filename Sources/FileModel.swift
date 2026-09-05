@@ -547,6 +547,14 @@ final class PaneModel: ObservableObject, Identifiable {
         let exists = FileManager.default.fileExists(atPath: item.url.path, isDirectory: &isDir)
         if item.isDirectory || (exists && isDir.boolValue) {
             navigate(to: item.url)
+        } else if CloudDownload.isOnlineOnly(item.url) {
+            // An online-only placeholder handed straight to an app can open as
+            // an empty or broken document. Pull the contents down first.
+            let url = item.url
+            Task.detached {
+                _ = CloudDownload.download([url])
+                await MainActor.run { NSWorkspace.shared.open(url) }
+            }
         } else {
             NSWorkspace.shared.open(item.url)
         }

@@ -426,6 +426,7 @@ struct ContentView: View {
                     onPasteItems: { paste($0, into: leftPane) },
                     onDelete: { requestDelete(side: .left) },
                     onGetInfo: { infoTargets = $0 },
+                    onError: { errorMessage = $0 },
                     onNewFolder: { presentNewItem(in: .left, isFile: false) },
                     onNewFile: { presentNewItem(in: .left, isFile: true) }
                 )
@@ -448,6 +449,7 @@ struct ContentView: View {
                     onPasteItems: { paste($0, into: rightPane) },
                     onDelete: { requestDelete(side: .right) },
                     onGetInfo: { infoTargets = $0 },
+                    onError: { errorMessage = $0 },
                     onNewFolder: { presentNewItem(in: .right, isFile: false) },
                     onNewFile: { presentNewItem(in: .right, isFile: true) }
                 )
@@ -1305,6 +1307,7 @@ struct PaneView: View {
     let onPasteItems: ([NSItemProvider]) -> Void
     let onDelete: () -> Void
     let onGetInfo: ([URL]) -> Void
+    let onError: (String) -> Void
     let onNewFolder: () -> Void
     let onNewFile: () -> Void
 
@@ -1331,6 +1334,7 @@ struct PaneView: View {
                 onCommitRename: onCommitRename,
                 onDelete: onDelete,
                 onGetInfo: onGetInfo,
+                onError: onError,
                 onDrop: onDropFiles,
                 onDropInto: onDropInto,
                 onNewFolder: onNewFolder,

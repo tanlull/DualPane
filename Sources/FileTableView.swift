@@ -18,6 +18,7 @@ struct FileTableView: NSViewRepresentable {
     let onCommitRename: (URL, String) -> Void
     let onDelete: () -> Void
     let onGetInfo: ([URL]) -> Void
+    let onError: (String) -> Void
     let onDrop: ([URL]) -> Bool
     let onDropInto: ([URL], URL, Bool) -> Bool // urls, destination folder, move
     let onNewFolder: () -> Void
@@ -557,6 +558,12 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Reveal in Finder", #selector(menuReveal)))
             menu.addItem(makeMenuItem("Open in Terminal", #selector(menuTerminal)))
             menu.addItem(.separator())
+            // Only meaningful inside a cloud provider; hidden elsewhere by
+            // menuNeedsUpdate, along with its separator.
+            let pin = makeMenuItem("Keep on This Device (Download Now)", #selector(menuTogglePin))
+            menu.addItem(pin)
+            pinSeparator = .separator()
+            menu.addItem(pinSeparator!)
             menu.addItem(makeMenuItem("Rename…", #selector(menuRename)))
             menu.addItem(.separator())
             menu.addItem(makeMenuItem("New Folder", #selector(menuNewFolder)))
@@ -575,6 +582,9 @@ struct FileTableView: NSViewRepresentable {
             menu.addItem(makeMenuItem("Get Info", #selector(menuGetInfo), key: "i"))
             return menu
         }
+
+        /// Kept so the separator can be hidden along with the pin item.
+        private var pinSeparator: NSMenuItem?
 
         private func makeMenuItem(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
@@ -614,10 +624,13 @@ struct FileTableView: NSViewRepresentable {
             }
             let hasSelection = !table.selectedRowIndexes.isEmpty
             let canPaste = NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: nil)
+            updatePinItem(in: menu, urls: selectedURLs())
             for item in menu.items {
                 switch item.action {
                 case #selector(menuOpen), #selector(menuReveal), #selector(menuCopy),
                      #selector(menuCut), #selector(menuDelete), #selector(menuGetInfo):
+                    item.isEnabled = hasSelection
+                case #selector(menuTogglePin):
                     item.isEnabled = hasSelection
                 case #selector(menuRename):
                     item.isEnabled = table.selectedRowIndexes.count == 1
@@ -649,6 +662,35 @@ struct FileTableView: NSViewRepresentable {
                     withBundleIdentifier: "com.apple.Terminal") else { return }
                 NSWorkspace.shared.open([dir], withApplicationAt: term,
                                         configuration: NSWorkspace.OpenConfiguration())
+            }
+        }
+
+        private func selectedURLs() -> [URL] {
+            guard let table = tableView else { return [] }
+            return table.selectedRowIndexes.compactMap { $0 < items.count ? items[$0].url : nil }
+        }
+
+        /// Show "Always Keep on This Device" only for cloud items, and tick it
+        /// once the provider has told us the current policy. The answer is
+        /// async, so the checkmark appears a moment after the menu opens.
+        private func updatePinItem(in menu: NSMenu, urls: [URL]) {
+            guard let item = menu.items.first(where: { $0.action == #selector(menuTogglePin) }) else { return }
+            let show = !urls.isEmpty && urls.allSatisfy(CloudDownload.isCloudLocation)
+            item.isHidden = !show
+            pinSeparator?.isHidden = !show
+        }
+
+        @objc func menuTogglePin(_ sender: Any?) {
+            let urls = selectedURLs()
+            guard !urls.isEmpty else { return }
+            let model = parent.model
+            let onError = parent.onError
+            Task.detached {
+                let result = CloudDownload.download(urls)
+                await MainActor.run {
+                    if let error = result.error { onError(error.localizedDescription) }
+                    model.reload()
+                }
             }
         }
 
