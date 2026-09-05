@@ -842,13 +842,20 @@ final class PaneTableView: NSTableView {
         guard needed > frame.width else { hideNameOverlay(); return }
 
         hoverRow = row
-        nameOverlay.font = text.font
+        // Slightly larger than the row text: the point of the overlay is to
+        // read a name the column cut off, so it should be comfortable to read.
+        let base = text.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let font = NSFont(descriptor: base.fontDescriptor, size: base.pointSize + 2) ?? base
+        nameOverlay.font = font
         nameOverlay.textColor = text.textColor
         nameOverlay.stringValue = text.stringValue
-        // Same y and height as the real text so the name sits on exactly the
-        // same line; only a little horizontal padding for the border.
-        nameOverlay.frame = NSRect(x: frame.minX - 3, y: frame.minY,
-                                   width: needed + 8, height: frame.height)
+        let width = ceil((text.stringValue as NSString)
+            .size(withAttributes: [.font: font]).width)
+        // Kept on the same line as the real text, grown a little vertically
+        // around it so the bigger type is not clipped.
+        let grow: CGFloat = 4
+        nameOverlay.frame = NSRect(x: frame.minX - 4, y: frame.minY - grow / 2,
+                                   width: width + 10, height: frame.height + grow)
         nameOverlay.isHidden = false
         addSubview(nameOverlay)   // last subview: draws over the row
     }
