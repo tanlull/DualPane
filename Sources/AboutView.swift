@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.23"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.24"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,11 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.24", date: "5 Sep 2026", changes: [
+            "A .. row now sits at the top of every folder: click it (or press Return on it) to go up one level",
+            "Drop files on .. to move them one folder up — a move within the same pane, a copy when they come from the other pane or another app",
+            "The .. row cannot be dragged, renamed, copied or deleted, and it is hidden at the top of a drive and while a tag filter is showing matches from all over the disk",
+        ]),
         Release(version: "3.23", date: "5 Sep 2026", changes: [
             "Clearer wording for the cloud badge and menu: the green check means the file is downloaded to this Mac right now, not that OneDrive has pinned it with Always Keep on This Device — only OneDrive itself can set that",
             "The right-click item is now called Download Now (Store on This Mac)",

@@ -88,7 +88,7 @@ struct FileTableView: NSViewRepresentable {
         table.onFocus = { coordinator.parent.onActivate() }
         table.onReturn = { coordinator.openSelection() }
         table.onSlowClickRename = { [weak table] row in
-            guard let table else { return }
+            guard let table, coordinator.fileItem(at: row) != nil else { return }
             coordinator.beginEditing(table: table, row: row)
         }
 
@@ -110,7 +110,18 @@ struct FileTableView: NSViewRepresentable {
         coordinator.lastDirectory = model.directory
         coordinator.lastModelID = model.id
 
+        // ".." at the top, except at the root or while a tag filter is
+        // showing matches from all over the disk.
+        let directory = model.directory
+        let parentDirectory = directory.deletingLastPathComponent()
+        let newParent: URL? = (model.tagFilter == nil
+                               && parentDirectory.path != directory.path) ? parentDirectory : nil
+
         var needsReload = false
+        if coordinator.parentURL != newParent {
+            coordinator.parentURL = newParent
+            needsReload = true
+        }
         if modelChanged || coordinator.lastRevision != model.revision {
             coordinator.lastRevision = model.revision
             coordinator.items = model.items
@@ -130,7 +141,7 @@ struct FileTableView: NSViewRepresentable {
         let desired = IndexSet(
             model.items.enumerated()
                 .filter { model.selection.contains($0.element.url) }
-                .map(\.offset)
+                .map { coordinator.displayRow(forItem: $0.offset) }
         )
         if table.selectedRowIndexes != desired, !table.isTrackingMouse {
             coordinator.isSyncingSelection = true
@@ -141,7 +152,8 @@ struct FileTableView: NSViewRepresentable {
         // A reveal was requested (e.g. a just-created item): scroll it into
         // view but leave its name alone.
         if let target = model.revealRequest,
-           let row = coordinator.items.firstIndex(where: { $0.url == target }) {
+           let index = coordinator.items.firstIndex(where: { $0.url == target }) {
+            let row = coordinator.displayRow(forItem: index)
             DispatchQueue.main.async {
                 model.revealRequest = nil
                 guard row < table.numberOfRows else { return }
@@ -151,7 +163,8 @@ struct FileTableView: NSViewRepresentable {
 
         // A rename was requested (toolbar/menu): begin in-cell editing of that row.
         if let target = model.renameRequest,
-           let row = coordinator.items.firstIndex(where: { $0.url == target }) {
+           let index = coordinator.items.firstIndex(where: { $0.url == target }) {
+            let row = coordinator.displayRow(forItem: index)
             DispatchQueue.main.async {
                 model.renameRequest = nil
                 guard row < table.numberOfRows else { return }
@@ -171,19 +184,50 @@ struct FileTableView: NSViewRepresentable {
         var isSyncingSelection = false
         var lastDirectory: URL?
         var lastModelID: UUID?
+        /// The folder shown as ".." at the top of the list — nil at the
+        /// filesystem root and while a tag filter is showing results from all
+        /// over the disk, where "up" has no meaning.
+        var parentURL: URL?
+
+        /// Rows shift down by one when ".." is present. Everything that maps
+        /// between AppKit rows and model items goes through these.
+        private var parentOffset: Int { parentURL == nil ? 0 : 1 }
+        func isParentRow(_ row: Int) -> Bool { parentURL != nil && row == 0 }
+        func fileItem(at row: Int) -> FileItem? {
+            let index = row - parentOffset
+            guard index >= 0, index < items.count else { return nil }
+            return items[index]
+        }
+        func displayRow(forItem index: Int) -> Int { index + parentOffset }
         weak var tableView: NSTableView?
 
         init(_ parent: FileTableView) {
             self.parent = parent
         }
 
-        func numberOfRows(in tableView: NSTableView) -> Int { items.count }
+        func numberOfRows(in tableView: NSTableView) -> Int { items.count + parentOffset }
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-            guard row < items.count, let column = tableColumn else { return nil }
-            let item = items[row]
+            guard let column = tableColumn else { return nil }
             let cell = (tableView.makeView(withIdentifier: column.identifier, owner: nil) as? NSTableCellView)
                 ?? makeCell(identifier: column.identifier)
+            // The ".." row: click it to go up, or drop files on it to move
+            // them one folder up.
+            if isParentRow(row) {
+                switch column.identifier.rawValue {
+                case "name":
+                    cell.imageView?.image = IconProvider.icon(for: parentURL ?? URL(fileURLWithPath: "/"),
+                                                              isDirectory: true, tintColor: nil, tintKey: "")
+                    cell.textField?.stringValue = ".."
+                    cell.textField?.textColor = .secondaryLabelColor
+                    (cell.subviews.first { $0 is CloudBadgeView } as? CloudBadgeView)?.state = .notCloud
+                    (cell.subviews.first { $0 is TagDotView } as? TagDotView)?.colors = []
+                default:
+                    cell.textField?.stringValue = ""
+                }
+                return cell
+            }
+            guard let item = fileItem(at: row) else { return nil }
             switch column.identifier.rawValue {
             case "name":
                 cell.imageView?.image = item.icon
@@ -284,7 +328,7 @@ struct FileTableView: NSViewRepresentable {
 
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !isSyncingSelection, let table = notification.object as? NSTableView else { return }
-            let urls = Set(table.selectedRowIndexes.compactMap { $0 < items.count ? items[$0].url : nil })
+            let urls = Set(table.selectedRowIndexes.compactMap { fileItem(at: $0)?.url })
             MainActor.assumeIsolated {
                 if parent.model.selection != urls {
                     parent.model.selection = urls
@@ -297,14 +341,21 @@ struct FileTableView: NSViewRepresentable {
         @objc func doubleClicked(_ sender: Any?) {
             guard let table = tableView else { return }
             let row = table.clickedRow
-            guard row >= 0, row < items.count else { return }
-            let item = items[row]
+            if isParentRow(row) {
+                MainActor.assumeIsolated { parent.model.goUp() }
+                return
+            }
+            guard let item = fileItem(at: row) else { return }
             MainActor.assumeIsolated { parent.model.open(item) }
         }
 
         func openSelection() {
-            guard let table = tableView, let row = table.selectedRowIndexes.first, row < items.count else { return }
-            let item = items[row]
+            guard let table = tableView, let row = table.selectedRowIndexes.first else { return }
+            if isParentRow(row) {
+                MainActor.assumeIsolated { parent.model.goUp() }
+                return
+            }
+            guard let item = fileItem(at: row) else { return }
             MainActor.assumeIsolated { parent.model.open(item) }
         }
 
@@ -391,8 +442,7 @@ struct FileTableView: NSViewRepresentable {
             // Lock the field again so it stops intercepting row clicks.
             endEditingAppearance(field)
             let row = table.row(for: field)
-            guard row >= 0, row < items.count else { return }
-            let item = items[row]
+            guard let item = fileItem(at: row) else { return }
             // Esc cancels: revert the text and don't rename.
             let movement = (obj.userInfo?["NSTextMovement"] as? Int) ?? 0
             if movement == NSTextMovement.cancel.rawValue {
@@ -428,11 +478,11 @@ struct FileTableView: NSViewRepresentable {
         // MARK: Drag source
 
         func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-            guard row < items.count else { return nil }
+            guard let item = fileItem(at: row) else { return nil }   // ".." is not draggable
             // While a name is being edited, a drag near the edit box must not
             // start a file drag — that would end the rename mid-selection.
             if MainActor.assumeIsolated({ parent.model.isRenaming }) { return nil }
-            return items[row].url as NSURL
+            return item.url as NSURL
         }
 
         // MARK: Drop target
@@ -468,11 +518,17 @@ struct FileTableView: NSViewRepresentable {
             return true
         }
 
-        private func folderTarget(for urls: [URL], row: Int) -> FileItem? {
-            guard row >= 0, row < items.count else { return nil }
-            let item = items[row]
-            guard item.isDirectory, canDrop(urls, into: item.url) else { return nil }
-            return item
+        /// The folder a drop on `row` would go into: the ".." row means the
+        /// parent folder, so files can be moved one level up by dropping them
+        /// on it.
+        private func folderTarget(for urls: [URL], row: Int) -> URL? {
+            if isParentRow(row) {
+                guard let parentURL, canDrop(urls, into: parentURL) else { return nil }
+                return parentURL
+            }
+            guard let item = fileItem(at: row), item.isDirectory,
+                  canDrop(urls, into: item.url) else { return nil }
+            return item.url
         }
 
         func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo,
@@ -484,10 +540,8 @@ struct FileTableView: NSViewRepresentable {
             // Hovering over a folder row: drop *into* that folder — a move when
             // the drag started in this same pane, a copy when it came from the
             // other pane or another app.
-            if let target = folderTarget(for: urls, row: row) {
-                if let targetRow = items.firstIndex(of: target) {
-                    tableView.setDropRow(targetRow, dropOperation: .on)
-                }
+            if folderTarget(for: urls, row: row) != nil {
+                tableView.setDropRow(row, dropOperation: .on)
                 return sameTable ? .move : .copy
             }
 
@@ -504,7 +558,7 @@ struct FileTableView: NSViewRepresentable {
             guard !urls.isEmpty else { return false }
             let sameTable = (info.draggingSource as? NSTableView) === tableView
             if dropOperation == .on, let target = folderTarget(for: urls, row: row) {
-                return parent.onDropInto(urls, target.url, sameTable)
+                return parent.onDropInto(urls, target, sameTable)
             }
             if sameTable { return false }
             return parent.onDrop(urls)
@@ -606,7 +660,7 @@ struct FileTableView: NSViewRepresentable {
 
         @objc private func menuGetInfo() {
             guard let table = tableView else { return }
-            let urls = table.selectedRowIndexes.compactMap { $0 < items.count ? items[$0].url : nil }
+            let urls = selectedURLs()
             guard !urls.isEmpty else { return }
             parent.onGetInfo(urls)
         }
@@ -634,7 +688,7 @@ struct FileTableView: NSViewRepresentable {
             if clicked >= 0, !table.selectedRowIndexes.contains(clicked) {
                 table.selectRowIndexes([clicked], byExtendingSelection: false)
             }
-            let hasSelection = !table.selectedRowIndexes.isEmpty
+            let hasSelection = !selectedURLs().isEmpty
             let canPaste = NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: nil)
             updatePinItem(in: menu, urls: selectedURLs())
             for item in menu.items {
@@ -645,7 +699,7 @@ struct FileTableView: NSViewRepresentable {
                 case #selector(menuTogglePin):
                     item.isEnabled = hasSelection
                 case #selector(menuRename):
-                    item.isEnabled = table.selectedRowIndexes.count == 1
+                    item.isEnabled = selectedURLs().count == 1
                 case #selector(menuPaste):
                     item.isEnabled = canPaste
                 default:
@@ -658,8 +712,8 @@ struct FileTableView: NSViewRepresentable {
 
         @objc func menuReveal(_ sender: Any?) {
             guard let table = tableView else { return }
-            let urls = table.selectedRowIndexes.compactMap { $0 < items.count ? items[$0].url : nil }
-            NSWorkspace.shared.activateFileViewerSelecting(urls)
+            _ = table
+            NSWorkspace.shared.activateFileViewerSelecting(selectedURLs())
         }
 
         @objc func menuTerminal(_ sender: Any?) {
@@ -667,7 +721,7 @@ struct FileTableView: NSViewRepresentable {
                 // Open the clicked folder if one folder is selected, else the
                 // pane's current directory ("open terminal here").
                 let folders = (tableView?.selectedRowIndexes ?? [])
-                    .compactMap { $0 < items.count ? items[$0] : nil }
+                    .compactMap { self.fileItem(at: $0) }
                     .filter(\.isDirectory)
                 let dir = folders.count == 1 ? folders[0].url : parent.model.directory
                 guard let term = NSWorkspace.shared.urlForApplication(
@@ -679,7 +733,7 @@ struct FileTableView: NSViewRepresentable {
 
         private func selectedURLs() -> [URL] {
             guard let table = tableView else { return [] }
-            return table.selectedRowIndexes.compactMap { $0 < items.count ? items[$0].url : nil }
+            return table.selectedRowIndexes.compactMap { fileItem(at: $0) }.map(\.url)
         }
 
         /// Show "Always Keep on This Device" only for cloud items, and tick it
