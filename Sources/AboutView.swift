@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.16"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.17"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,9 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.17", date: "5 Sep 2026", changes: [
+            "While renaming, a name longer than the edit box now scrolls along with the cursor, so you can drag or arrow your way to the end of it",
+        ]),
         Release(version: "3.16", date: "5 Sep 2026", changes: [
             "Fixed renaming long names: the hover label that shows a name too long for the column was sitting on top of the edit box and eating the click, so text could not be selected — and the drag turned into a file drag whose path was dropped into the name",
             "Files can no longer be dropped into the name while you are renaming",

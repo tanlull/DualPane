@@ -316,6 +316,14 @@ struct FileTableView: NSViewRepresentable {
             field.backgroundColor = .textBackgroundColor
             field.focusRingType = .default
             field.lineBreakMode = .byClipping
+            // A label's cell neither is single-line nor scrolls, so a name
+            // longer than the box just stopped at the edge: dragging or
+            // arrowing past the last visible character never scrolled the text
+            // along. Both flags together make the field editor follow the
+            // insertion point to the end of the name.
+            field.usesSingleLineMode = true
+            field.cell?.isScrollable = true
+            field.cell?.wraps = false
             field.setContentHuggingPriority(.init(1), for: .horizontal)
             (table as? PaneTableView)?.isEditingCell = true
             table.editColumn(0, row: row, with: nil, select: true)
@@ -336,6 +344,9 @@ struct FileTableView: NSViewRepresentable {
             field.drawsBackground = false
             field.focusRingType = .none
             field.lineBreakMode = .byTruncatingTail
+            field.usesSingleLineMode = false
+            field.cell?.isScrollable = false
+            field.cell?.wraps = true
             field.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         }
 
