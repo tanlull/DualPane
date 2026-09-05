@@ -343,10 +343,13 @@ struct FileTableView: NSViewRepresentable {
             field.isBezeled = false
             field.drawsBackground = false
             field.focusRingType = .none
-            field.lineBreakMode = .byTruncatingTail
+            // Order matters: wraps/usesSingleLineMode reset lineBreakMode, so
+            // set the truncation last. Leaving wraps on made a long name lay
+            // out over two lines in a 22pt row instead of truncating.
             field.usesSingleLineMode = false
             field.cell?.isScrollable = false
-            field.cell?.wraps = true
+            field.cell?.wraps = false
+            field.lineBreakMode = .byTruncatingTail
             field.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         }
 
