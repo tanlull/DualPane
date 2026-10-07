@@ -238,14 +238,15 @@ final class PaneModel: ObservableObject, Identifiable {
     @Published var tagFilter: Int? {
         didSet { reload() }
     }
+    // Every new window and tab starts newest-first (Modified, descending).
     @Published var sortOrder: [KeyPathComparator<FileItem>] = [
-        KeyPathComparator(\FileItem.name, comparator: .localizedStandard)
+        KeyPathComparator(\FileItem.modified, order: .reverse)
     ] {
         didSet { applySort() }
     }
     // Keep folders on top only when sorting by name. When sorting by size or
     // date, sort every item together so the real order shows.
-    var foldersFirst = true
+    var foldersFirst = false
 
     // Bumped whenever items actually change, so the table view can skip
     // expensive array comparisons on selection-only updates.

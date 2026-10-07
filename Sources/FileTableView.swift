@@ -60,12 +60,14 @@ struct FileTableView: NSViewRepresentable {
         table.addTableColumn(nameCol)
         table.addTableColumn(sizeCol)
         table.addTableColumn(dateCol)
-        table.sortDescriptors = [nameCol.sortDescriptorPrototype!]
 
         // Remember column widths per pane across launches. Setting autosaveName
         // after the columns exist makes the table restore any saved widths now.
         table.autosaveName = autosaveName
         table.autosaveTableColumns = true
+        // Autosave also restores the last-used sort; a new window starts from
+        // the model's default (newest first) instead.
+        table.sortDescriptors = Coordinator.sortDescriptors(for: model)
 
         // Right-click (or Control-click) on the column header: show/hide columns.
         // Hidden state is persisted separately — autosave only covers order/width.
@@ -109,6 +111,14 @@ struct FileTableView: NSViewRepresentable {
         let directoryChanged = modelChanged || coordinator.lastDirectory != model.directory
         coordinator.lastDirectory = model.directory
         coordinator.lastModelID = model.id
+
+        // Each tab keeps its own sort; show that tab's column in the header.
+        if modelChanged {
+            let descriptors = Coordinator.sortDescriptors(for: model)
+            if table.sortDescriptors != descriptors {
+                table.sortDescriptors = descriptors
+            }
+        }
 
         // ".." at the top, except at the root or while a tag filter is
         // showing matches from all over the disk.
@@ -455,23 +465,49 @@ struct FileTableView: NSViewRepresentable {
 
         // MARK: Sorting
 
+        /// The header's sort indicator for a model's current sort order.
+        @MainActor
+        static func sortDescriptors(for model: PaneModel) -> [NSSortDescriptor] {
+            guard let comparator = model.sortOrder.first else { return [] }
+            let ascending = comparator.order == .forward
+            switch comparator.keyPath {
+            case \FileItem.name as PartialKeyPath<FileItem>:
+                return [NSSortDescriptor(key: "name", ascending: ascending,
+                                         selector: #selector(NSString.localizedStandardCompare(_:)))]
+            case \FileItem.size as PartialKeyPath<FileItem>:
+                return [NSSortDescriptor(key: "size", ascending: ascending)]
+            case \FileItem.modified as PartialKeyPath<FileItem>:
+                return [NSSortDescriptor(key: "modified", ascending: ascending)]
+            default:
+                return []
+            }
+        }
+
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
             guard let descriptor = tableView.sortDescriptors.first, let key = descriptor.key else { return }
             let order: SortOrder = descriptor.ascending ? .forward : .reverse
             MainActor.assumeIsolated {
+                let model = parent.model
+                let foldersFirst: Bool
+                let sortOrder: [KeyPathComparator<FileItem>]
                 switch key {
                 case "name":
-                    parent.model.foldersFirst = true
-                    parent.model.sortOrder = [KeyPathComparator(\FileItem.name, comparator: .localizedStandard, order: order)]
+                    foldersFirst = true
+                    sortOrder = [KeyPathComparator(\FileItem.name, comparator: .localizedStandard, order: order)]
                 case "size":
-                    parent.model.foldersFirst = false
-                    parent.model.sortOrder = [KeyPathComparator(\FileItem.size, order: order)]
+                    foldersFirst = false
+                    sortOrder = [KeyPathComparator(\FileItem.size, order: order)]
                 case "modified":
-                    parent.model.foldersFirst = false
-                    parent.model.sortOrder = [KeyPathComparator(\FileItem.modified, order: order)]
+                    foldersFirst = false
+                    sortOrder = [KeyPathComparator(\FileItem.modified, order: order)]
                 default:
-                    break
+                    return
                 }
+                // Syncing the header to a tab's own sort lands here too; don't
+                // re-sort (and re-publish) when nothing actually changed.
+                guard model.foldersFirst != foldersFirst || model.sortOrder != sortOrder else { return }
+                model.foldersFirst = foldersFirst
+                model.sortOrder = sortOrder
             }
         }
 

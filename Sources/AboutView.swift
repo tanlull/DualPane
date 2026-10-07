@@ -3,7 +3,7 @@ import AppKit
 
 enum AppInfo {
     static let name = "DualPane"
-    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.24"
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.25"
     static let author = "Tanya S. (tanlull)"
     static let repoURL = URL(string: "https://github.com/tanlull/DualPane")!
 
@@ -14,6 +14,10 @@ enum AppInfo {
     }
 
     static let changelog: [Release] = [
+        Release(version: "3.25", date: "7 Oct 2026", changes: [
+            "New windows and new tabs now open sorted by Modified, newest first, so the latest files are on top",
+            "Switching tabs now shows that tab's own sort column in the header",
+        ]),
         Release(version: "3.24", date: "5 Sep 2026", changes: [
             "A .. row now sits at the top of every folder: click it (or press Return on it) to go up one level",
             "Drop files on .. to move them one folder up — a move within the same pane, a copy when they come from the other pane or another app",
